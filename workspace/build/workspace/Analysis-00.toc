@@ -314,6 +314,18 @@
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\ast.py',
    'PYMODULE'),
+  ('_py_abc',
+   'C:\\Users\\Conor '
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\_py_abc.py',
+   'PYMODULE'),
+  ('subprocess',
+   'C:\\Users\\Conor '
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\subprocess.py',
+   'PYMODULE'),
+  ('signal',
+   'C:\\Users\\Conor '
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\signal.py',
+   'PYMODULE'),
   ('stringprep',
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\stringprep.py',
@@ -337,18 +349,6 @@
   ('_compat_pickle',
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\_compat_pickle.py',
-   'PYMODULE'),
-  ('subprocess',
-   'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\subprocess.py',
-   'PYMODULE'),
-  ('signal',
-   'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\signal.py',
-   'PYMODULE'),
-  ('_py_abc',
-   'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\_py_abc.py',
    'PYMODULE'),
   ('copy',
    'C:\\Users\\Conor '

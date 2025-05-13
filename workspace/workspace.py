@@ -190,6 +190,7 @@ def apply_initial_perks(char, duel_type):
             elif tier == 3: 
                 char.base_speed += 6; char.base_attack += 1; char.base_defense += 0
         if "Battlefield Champion" in perk:
+            tier = int(perk[-1])
             # All duels: +1 Speed, +1 Attack (Defense remains as base)
             if tier == 1: 
                 char.base_speed += 1; char.base_attack += 1; char.base_defense += 0
@@ -198,6 +199,7 @@ def apply_initial_perks(char, duel_type):
             elif tier == 3: 
                 char.base_speed += 3; char.base_attack += 3; char.base_defense += 0
         if "Steel Tempest" in perk and context == "melee":
+            tier = int(perk[-1])
             # Melee duels: +1 Attack, +1 Defense (all tiers)
             if tier == 1: 
                 char.base_speed += 0; char.base_attack += 1; char.base_defense += 1
@@ -206,6 +208,7 @@ def apply_initial_perks(char, duel_type):
             elif tier == 3: 
                 char.base_speed += 0; char.base_attack += 3; char.base_defense += 3
         if "Sworn Sword" in perk and context == "melee":
+            tier = int(perk[-1])
             # Melee duels: +1 Speed, +1 Defense (all tiers)
             if tier == 1: 
                 char.base_speed += 1; char.base_attack += 0; char.base_defense += 1
