@@ -4,7 +4,6 @@
 ##################################
 
 import random
-import re
 
 # ----------------------------- Data Classes -----------------------------
 class Character:
@@ -95,19 +94,19 @@ def apply_age_malus(char):
             malus = max(0, malus - 2*t)
             break
     # Reduce base stats by malus (not below 0)
-    char.base_speed   = max(0, char.base_speed   - malus)
-    char.base_attack  = max(0, char.base_attack  - malus)
-    char.base_defense = max(0, char.base_defense - malus)
+    char.base_speed   = char.base_speed - malus
+    char.base_attack  = char.base_attack - malus
+    char.base_defense = char.base_defense - malus
 
 def apply_initial_perks(char, duel_type):
     """Adjust base stats according to perks (weapon specialists, etc.) and set special counters."""
     # Indomitable: set base morale and Major Injury ignore count
     if "Indomitable T3" in char.perks:
-        char.base_morale = 90  # +15 morale
+        char.base_morale = 95  # +15 morale
     elif "Indomitable T2" in char.perks:
-        char.base_morale = 75  # +15 morale
+        char.base_morale = 80  # +15 morale
     elif "Indomitable T1" in char.perks:
-        char.base_morale = 60  # +10 morale
+        char.base_morale = 65  # +15 morale
     # Determine how many major injury maluses can be ignored (highest tier of Indomitable)
     for t in (3,2,1):
         if f"Indomitable T{t}" in char.perks:
@@ -230,8 +229,8 @@ def apply_initial_perks(char, duel_type):
 
 def initialize_character(char, duel_type):
     """Apply age and perk modifiers to set current stats at duel start."""
-    apply_age_malus(char)
     apply_initial_perks(char, duel_type)
+    apply_age_malus(char)
     char.current_speed = char.base_speed
     char.current_attack = char.base_attack
     char.current_defense = char.base_defense
@@ -273,13 +272,19 @@ def apply_primary_injury(char, weapon_type="live"):
     """Roll on the primary injury table (used when a character is defeated)."""
     return resolve_injury_roll(PRIMARY_INJURY_TABLE, weapon_type)
 
+# ------------------------------ Combat Initialization ------------------------------
+def prepare_duel(team1, team2, duel_type):
+    """Initialize all characters on both teams for the duel."""
+    for char in team1:
+        initialize_character(char, duel_type)
+    for char in team2:
+        initialize_character(char, duel_type)
+
 # ------------------------------ Combat Simulations ------------------------------
 def single_combat_melee_melee(team1, team2, duel_type="melee"):
     """Simulate a one-on-one melee duel."""
     log = []
     c1, c2 = team1[0], team2[0]
-    initialize_character(c1, duel_type)
-    initialize_character(c2, duel_type)
     rnd = 1
     while True:
         # Initiative rolls
@@ -397,8 +402,6 @@ def single_combat_ranged_melee(team1, team2, duel_type="mixed"):
     log = []
     rng = team1[0]  # ranged combatant
     m = team2[0]    # melee combatant
-    initialize_character(rng, duel_type)
-    initialize_character(m, duel_type)
     # Phase 1: Ranged volleys (2 rounds normally, 3 rounds if Marksman T3)
     volley_rounds = 3 if "Marksman T3" in rng.perks else 2
     for rnd in range(1, volley_rounds+1):
@@ -438,6 +441,8 @@ def single_combat_ranged_melee(team1, team2, duel_type="mixed"):
         log.append(f"{m.name} wins!")
         return log
     log.append(f"Switching to melee from round {melee_round+1}+")
+    # Change Context
+    
     # Continue melee from next round until someone wins
     # We reuse single_combat_melee_melee for the continued fight (skipping its initialization and Round 1 log)
     continued_log = single_combat_melee_melee([m], [rng], duel_type="melee")
@@ -456,8 +461,6 @@ def single_combat_ranged_ranged(team1, team2, duel_type="ranged"):
     """Simulate a one-on-one ranged duel."""
     log = []
     a1, a2 = team1[0], team2[0]
-    initialize_character(a1, duel_type)
-    initialize_character(a2, duel_type)
     rnd = 1
     while True:
         i1, d11, d12 = roll_initiative(a1)
@@ -493,7 +496,6 @@ def multi_combat_melee_melee(team1, team2, duel_type="melee"):
     # Initialize all combatants
     for side, team in enumerate((team1, team2), start=1):
         for c in team:
-            initialize_character(c, duel_type)
             combatants.append({'char': c, 'side': side, 'init': 0})
     rnd = 1
     while True:
@@ -636,7 +638,6 @@ def multi_combat_ranged_ranged(team1, team2, duel_type="ranged"):
     combatants = []
     for side, team in enumerate((team1, team2), start=1):
         for c in team:
-            initialize_character(c, duel_type)
             combatants.append({'char': c, 'side': side, 'init': 0})
     rnd = 1
     while True:
@@ -706,7 +707,7 @@ def _get_combatant(idx, combat_type):
 
     # create with zero base stats—your perk & age logic will fill them in
     c = Character(name, 0, 0, 0, morale=50, age=age, perks=perks, combat_type=combat_type)
-    initialize_character(c, duel_type="mixed")
+    # initialize_character(c, duel_type="mixed")
     return c
 
 
@@ -732,7 +733,7 @@ def _run_once(fn, team1, team2, duel_type):
         print(line)
 
 
-def _run_many(fn, team1, team2, duel_type, trials=1000):
+def _run_many(fn, team1, team2, duel_type, trials=10000):
     # display stats once before bulk simulations
     display_stats(team1, team2, duel_type)
     import copy
@@ -778,7 +779,7 @@ def main():
 
     print("\nMode:")
     print("1. Run Once")
-    print("2. Run 1000 Runs & Win/Losses")
+    print("2. Run 10000 Runs & Win/Losses")
     mode = input("Select mode (1–2): ").strip()
     if mode not in ("1", "2"):
         print("Invalid mode.")
@@ -802,12 +803,16 @@ def main():
         team1 = [_get_combatant(i+1, ct1) for i in range(n1)]
         team2 = [_get_combatant(i+1, ct2) for i in range(n2)]
 
+    # Initialize characters for the selected duel scenario
+    prepare_duel(team1, team2, duel_type)   
+
     # execute
     if mode == "1":
         _run_once(fn, team1, team2, duel_type)
     else:
-        _run_many(fn, team1, team2, duel_type, trials=1000)
+        _run_many(fn, team1, team2, duel_type, trials=10000)
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
