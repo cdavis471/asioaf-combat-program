@@ -34,6 +34,10 @@
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\textwrap.py',
    'PYMODULE'),
+  ('copy',
+   'C:\\Users\\Conor '
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\copy.py',
+   'PYMODULE'),
   ('gettext',
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\gettext.py',
@@ -314,14 +318,6 @@
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\ast.py',
    'PYMODULE'),
-  ('subprocess',
-   'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\subprocess.py',
-   'PYMODULE'),
-  ('signal',
-   'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\signal.py',
-   'PYMODULE'),
   ('tracemalloc',
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\tracemalloc.py',
@@ -350,9 +346,13 @@
    'C:\\Users\\Conor '
    'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\stringprep.py',
    'PYMODULE'),
-  ('copy',
+  ('subprocess',
    'C:\\Users\\Conor '
-   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\copy.py',
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\subprocess.py',
+   'PYMODULE'),
+  ('signal',
+   'C:\\Users\\Conor '
+   'Davis\\AppData\\Local\\Programs\\Python\\Python310\\lib\\signal.py',
    'PYMODULE'),
   ('random',
    'C:\\Users\\Conor '

@@ -1,818 +1,2705 @@
-﻿##################################
-######  Joe's Duel Re‐work  ######
-#####  Test Code for Maesty  #####
-##################################
+﻿######################################################################################################
+################################### CROWNED DUELS - A MECH REWORK ####################################
+######################################################################################################
+# Created for /r/CrownedStag
+# Contains framework for melee, mixed and ranged combat.
+# Designed to work with /u/maesterbot
+######################################################################################################
 
 import random
 
-# ----------------------------- Data Classes -----------------------------
+######################################################################################################
+# Character Class
+######################################################################################################
 class Character:
-    """Represents a combatant with base stats, perks, and dynamic combat state."""
-    def __init__(self, name, speed, attack, defense, morale=50, age=30, perks=None, combat_type="melee"):
-        # Base stats
-        self.name = name
-        self.base_speed = speed
-        self.base_attack = attack
-        self.base_defense = defense
-        self.base_morale = morale
-        self.age = age
-        self.perks = perks or []
-        self.combat_type = combat_type
-        # Dynamic combat stats (set in initialize_character)
-        self.current_speed = speed
-        self.current_attack = attack
-        self.current_defense = defense
-        self.current_morale = morale
-        # Injury/malus tracking
-        self.injuries_sustained = 0
-        self.major_injuries_ignored = 0     # how many Major Injury maluses can be ignored (Indomitable)
-        # Perk state trackers
-        self.used_ff_reroll = False         # Favored by Fortune (T1) one-time reroll used
-        self.used_ff_opp_reroll = False     # Favored by Fortune (T2) opponent crit reroll used
-        self.berserker_triggered = False    # Berserker (T1) buff applied
-        self.berserker_rampage_rounds = 0   # Berserker (T2) extra rounds fighting after 0 HP
+    """Crowned Stag Character Class"""
+    def __init__(self, name, age=18, perks=None, injuries=None, injury_threshold=4, morale_threshold=15, items=None):
 
-# ------------------------- Injury Tables -------------------------
-PRIMARY_INJURY_TABLE = {
-    "blunted": [(1,20,"Major Injury"), (21,100,"Minor Injury")],
-    "live":    [(1,25,"Death"), (26,40,"Critical Injury"),
-                (41,71,"Major Injury"), (72,100,"Minor Injury")]
+        # Base Stats
+        self.name = name                            # Character Name
+        self.age = age                              # Character Age
+        self.perks = perks or []                    # Character Perks
+        self.injuries = injuries or []              # Character Injuries
+        self.injury_threshold = injury_threshold    # Injury Threshold
+        self.morale_threshold = morale_threshold    # Morale Threshold
+        self.items = items or []                    # Character Items
+
+        # Dynamic Stats
+        self.current_speed = 0                      # Current Speed
+        self.current_attack = 0                     # Current Attack
+        self.current_defense = 0                    # Current Defense
+        self.current_morale = 50                    # Current Morale
+
+        # Perk Check
+        self.max_combatants = 3                     # Max Combatants Before Free Attack
+        self.max_mixed_rounds = 2                   # Max Mixed Rounds (Ranged to Melee)
+        self.major_injury_buff = 0                  # Indomitable Perk Check
+        self.you_lucky = 0                          # Born Lucky Perk Check
+        self.bloodlusted = 0                        # Blood Lust Perk Check
+        self.imposed_presence = 0                   # Terrifying Presence T1 & T2 Check
+        self.berserked = 0                          # Berserker Perk Check
+
+        # Combat Checks
+        self.currently_engaging = 0                 # Attacking Someone This Round
+        self.crit_strike = 0                        # Crit Strike Rolled
+        self.crit_fail = 0                          # Crit Fail Rolled
+        self.combatants_faced = 0                   # Combatants Faced
+        self.major_injuries = 0                     # Major Injuries Taken
+
+######################################################################################################
+# Age Malus
+######################################################################################################
+
+def get_age_malus(age: int) -> int:
+    """Set Age Malus For Character"""
+    match age:                                      # Age
+        case age if age >= 91:                      # -- 91
+            return -10                              # --- Minus 10   
+        
+        case age if 81 <= age <= 90:                # -- 81-90
+            return -8                               # --- Minus 8
+        
+        case age if 71 <= age <= 80:                # -- 71-80
+            return -6                               # --- Minus 6
+        
+        case age if 61 <= age <= 70:                # -- 61-70
+            return -4                               # --- Minus 4
+        
+        case age if 51 <= age <= 60:                # -- 51-60
+            return -2                               # --- Minus 2
+        
+        case age if 16 <= age <= 50:                # -- 16-50
+            return 0                                # --- No Malus
+        
+        case 15:                                    # -- 15
+            return -2                               # --- Minus 2
+        
+        case 14:                                    # -- 14
+            return -4                               # --- Minus 4
+        
+        case 13:                                    # -- 13
+            return -6                               # --- Minus 6
+        
+        case 12:                                    # -- 12
+            return -8                               # --- Minus 8
+        
+        case age if 0 <= age <= 11:                 # -- 0-11
+            return -10                              # --- Minus 10
+        
+        case _:                                     # -- Else
+            raise ValueError("Invalid age")         # -- Invalid Age
+
+######################################################################################################
+# Perk Stats
+######################################################################################################
+ 
+PERK_STAT_MODIFIERS = {
+
+    # Blade Specialist Tree
+    "Blade Specialist T1": {"melee": {"speed": 1, "attack": 1, "defense": 0}},                # Blade Specialist T1
+    "Blade Specialist T2": {"melee": {"speed": 2, "attack": 1, "defense": 1}},                # Blade Specialist T2
+    "Blade Specialist T3": {"melee": {"speed": 2, "attack": 2, "defense": 2}},                # Blade Specialist T3
+
+    # Axe and Blunt Specialist Tree
+    "Axe and Blunt Specialist T1": {"melee": {"speed": 1, "attack": 1, "defense": 0}},        # Axe and Blunt Specialist T1
+    "Axe and Blunt Specialist T2": {"melee": {"speed": 2, "attack": 2, "defense": 0}},        # Axe and Blunt Specialist T2
+    "Axe and Blunt Specialist T3": {"melee": {"speed": 2, "attack": 3, "defense": 1}},        # Axe and Blunt Specialist T3
+
+    # Spear Specialist Tree
+    "Spear Specialist T1": {"melee": {"speed": 1, "attack": 0, "defense": 1}},                # Spear Specialist T1
+    "Spear Specialist T2": {"melee": {"speed": 2, "attack": 1, "defense": 1}},                # Spear Specialist T2
+    "Spear Specialist T3": {"melee": {"speed": 3, "attack": 1, "defense": 2}},                # Spear Specialist T3
+
+    # Duelist Tree
+    "Duelist T1": {"melee": {"speed": 2, "attack": 0, "defense": 0}},                         # Duelist T1
+    "Duelist T2": {"melee": {"speed": 4, "attack": 0, "defense": 0}},                         # Duelist T2
+    "Duelist T3": {"melee": {"speed": 5, "attack": 0, "defense": 0}},                         # Duelist T3
+
+    # Shield Specialist Tree
+    "Shield Specialist T1": {"melee": {"speed": 0, "attack": 0, "defense": 2},                # Shield Specialist T1
+                             "ranged": {"speed": 0, "attack": 0, "defense": 1}},
+    "Shield Specialist T2": {"melee": {"speed": 0, "attack": 0, "defense": 4},                # Shield Specialist T2
+                             "ranged": {"speed": 0, "attack": 0, "defense": 2}},
+    "Shield Specialist T3": {"melee": {"speed": 0, "attack": 0, "defense": 6},                # Shield Specialist T3
+                             "ranged": {"speed": 0, "attack": 0, "defense": 3}},
+
+    # Steel Tempest Tree
+    "Steel Tempest T1": {"melee": {"speed": 0, "attack": 1, "defense": 1}},                   # Steel Tempest T1
+    "Steel Tempest T2": {"melee": {"speed": 0, "attack": 2, "defense": 2}},                   # Steel Tempest T2
+    "Steel Tempest T3": {"melee": {"speed": 0, "attack": 3, "defense": 3}},                   # Steel Tempest T3
+
+    # Sworn Sword Tree
+    "Sworn Sword T1": {"melee": {"speed": 1, "attack": 0, "defense": 1}},                     # Sworn Sword T1
+    "Sworn Sword T2": {"melee": {"speed": 2, "attack": 0, "defense": 2}},                     # Sworn Sword T2
+    "Sworn Sword T3": {"melee": {"speed": 3, "attack": 0, "defense": 3}},                     # Sworn Sword T3
+
+    # Battlefield Champion Tree
+    "Battlefield Champion T1": {"all": {"speed": 1, "attack": 1, "defense": 0}},              # Battlefield Champion T1
+    "Battlefield Champion T2": {"all": {"speed": 2, "attack": 2, "defense": 0}},              # Battlefield Champion T2
+    "Battlefield Champion T3": {"all": {"speed": 3, "attack": 3, "defense": 0}},              # Battlefield Champion T3
+
+    # Bow Specialist Tree
+    "Bow Specialist T1": {"ranged": {"speed": 2, "attack": 1, "defense": 0}},                 # Bow Specialist T1
+    "Bow Specialist T2": {"ranged": {"speed": 3, "attack": 2, "defense": 0}},                 # Bow Specialist T2
+    "Bow Specialist T3": {"ranged": {"speed": 4, "attack": 3, "defense": 0}},                 # Bow Specialist T3
+
+    # Crossbow Specialist Tree
+    "Crossbow Specialist T1": {"ranged": {"speed": 1, "attack": 2, "defense": 0}},            # Crossbow Specialist T1
+    "Crossbow Specialist T2": {"ranged": {"speed": 2, "attack": 4, "defense": 0}},            # Crossbow Specialist T2
+    "Crossbow Specialist T3": {"ranged": {"speed": 3, "attack": 5, "defense": 0}},            # Crossbow Specialist T3
+
+    # Marksman Tree
+    "Marksman T1": {"ranged": {"speed": 2, "attack": 0, "defense": 0}},                       # Marksman T1
+    "Marksman T2": {"ranged": {"speed": 4, "attack": 0, "defense": 0}},                       # Marksman T2
+    "Marksman T3": {"ranged": {"speed": 6, "attack": 1, "defense": 0}},                       # Marksman T3
+
+    # Projectile Specialist Tree
+    "Thrown Projectile Specialist T1": {"all": {"speed": 1, "attack": 0, "defense": 0}},      # Thrown Projectile Specialist T1
+    "Thrown Projectile Specialist T2": {"all": {"speed": 2, "attack": 0, "defense": 0}},      # Thrown Projectile Specialist T2
+    "Thrown Projectile Specialist T3": {"all": {"speed": 3, "attack": 1, "defense": 0}},      # Thrown Projectile Specialist T3
+
+    # Special Solo Prowess Perks
+    "Bloodlust": {"melee": {"speed": 0, "attack": 0, "defense": 2}},                          # Bloodlust
+    "Berserker": {"melee": {"speed": 0, "attack": 2, "defense": 0}},                          # Berserker
+    "First in the Fray": {"all": {"speed": 1, "attack": 1, "defense": 1}},                    # First in the Fray
+    "Born Lucky": {"all": {"speed": 1, "attack": 0, "defense": 2}},                           # Born Lucky
+    "Favored by Fortune": {"all": {"speed": 0, "attack": 0, "defense": 2}}                    # Favored by Fortune
+
 }
-SECONDARY_INJURY_TABLE = {
-    "blunted": [(1,20,"Major Injury"), (21,100,"Minor Injury")],
-    "live":    [(1,2,"Critical Injury"), (3,40,"Major Injury"), (41,100,"Minor Injury")]
-}
-CRITICAL_INJURIES = {
-    1:  ("Death","Killed outright"),
-    # Entries 2–19 would detail specific critical injuries in a full implementation
-    20: ("Knocked Unconscious","No lasting malus, but combatant is knocked out")
-}
 
-# ------------------------- Dice Rolls -------------------------
-def roll_d20():
-    return random.randint(1, 20)
-def roll_2d20():
-    d1, d2 = roll_d20(), roll_d20()
-    return d1+d2, d1, d2
-def roll_3d5():
-    return random.randint(1,5) + random.randint(1,5) + random.randint(1,5)
-def roll_d100():
-    return random.randint(1, 100)
-def roll_d3():
-    return random.randint(1, 3)
+######################################################################################################
+# Initialize Melee Stats
+######################################################################################################
 
-# ------------------------- Injury Resolution -------------------------
-def resolve_injury_roll(table, weapon_type="live"):
-    r = roll_d100()
-    for low, high, result in table[weapon_type]:
-        if low <= r <= high:
-            return result
-def resolve_critical_injury():
-    r = roll_d20()
-    return CRITICAL_INJURIES.get(r, ("Critical Injury", "Severe injury"))
+def melee_initialization(character):
+    """Initialize Melee Stats for Character"""
+    # Initialize Character Stats
+    character.current_speed = 0                                                         # - Current Speed
+    character.current_attack = 0                                                        # - Current Attack
+    character.current_defense = 0                                                       # - Current Defense
 
-# ------------------------- Perk & Age Initialization -------------------------
-def apply_age_malus(char):
-    """Apply age-based stat maluses (reduced by Duelist perks)."""
-    age = char.age
-    malus = 0
-    if age <= 15:
-        malus = min(16-age, 5) * 2
-    elif 51 <= age <= 60:
-        malus = 2
-    elif 61 <= age <= 70:
-        malus = 4
-    elif 71 <= age <= 80:
-        malus = 6
-    elif 81 <= age <= 90:
-        malus = 8
-    elif age >= 91:
-        malus = 10
-    # Duelist reduces age malus (2 per tier)
-    for t in (3,2,1):
-        if f"Duelist T{t}" in char.perks:
-            malus = max(0, malus - 2*t)
-            break
-    # Reduce base stats by malus (not below 0)
-    char.base_speed   = char.base_speed - malus
-    char.base_attack  = char.base_attack - malus
-    char.base_defense = char.base_defense - malus
+    # Apply Age Malus
+    age_malus = get_age_malus(character.age)                                            # - Get Age Malus
+    character.current_speed += age_malus                                                # -- Apply Age Malus to Speed
+    character.current_attack += age_malus                                               # -- Apply Age Malus to Attack
+    character.current_defense += age_malus                                              # -- Apply Age Malus to Defense
 
-def apply_initial_perks(char, duel_type):
-    """Adjust base stats according to perks (weapon specialists, etc.) and set special counters."""
-    # Indomitable: set base morale and Major Injury ignore count
-    if "Indomitable T3" in char.perks:
-        char.base_morale = 95  # +15 morale
-    elif "Indomitable T2" in char.perks:
-        char.base_morale = 80  # +15 morale
-    elif "Indomitable T1" in char.perks:
-        char.base_morale = 65  # +15 morale
-    # Determine how many major injury maluses can be ignored (highest tier of Indomitable)
-    for t in (3,2,1):
-        if f"Indomitable T{t}" in char.perks:
-            char.major_injuries_ignored = t
-            break
-    # Context for specialist perks (use combat_type for 'mixed')
-    context = duel_type if duel_type in ("melee","ranged") else char.combat_type
-    # Apply stat bonuses from all perks
-    for perk in char.perks:
-        if "Blade Specialist" in perk and context == "melee":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 1; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 1; char.base_defense += 1
-            elif tier == 3: 
-                char.base_speed += 2; char.base_attack += 2; char.base_defense += 2
-        if "Axe and Blunt Specialist" in perk and context == "melee":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 1; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 2; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 2; char.base_attack += 3; char.base_defense += 1
-        if "Spear Specialist" in perk and context == "melee":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 0; char.base_defense += 1
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 1; char.base_defense += 1
-            elif tier == 3: 
-                char.base_speed += 3; char.base_attack += 1; char.base_defense += 2
-        if "Duelist" in perk and context == "melee":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 2; char.base_attack += 0; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 4; char.base_attack += 0; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 6; char.base_attack += 0; char.base_defense += 0
-        if "Shield Specialist" in perk:
-            tier = int(perk[-1])
-            # Melee: +2 Defense each tier; Ranged: +1 Defense each tier
-            if context == "melee":
-                if tier == 1: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 2
-                elif tier == 2: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 4
-                elif tier == 3: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 6
-            else:
-                if tier == 1: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 1
-                elif tier == 2: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 2
-                elif tier == 3: 
-                    char.base_speed += 0; char.base_attack += 0; char.base_defense += 3
-        if "Bow Specialist" in perk and context == "ranged":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 2; char.base_attack += 1; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 3; char.base_attack += 2; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 4; char.base_attack += 3; char.base_defense += 0
-        if "Crossbow Specialist" in perk and context == "ranged":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 2; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 4; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 3; char.base_attack += 6; char.base_defense += 0
-        if "Marksman" in perk and context == "ranged":
-            tier = int(perk[-1])
-            if tier == 1: 
-                char.base_speed += 2; char.base_attack += 0; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 4; char.base_attack += 0; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 6; char.base_attack += 1; char.base_defense += 0
-        if "Battlefield Champion" in perk:
-            tier = int(perk[-1])
-            # All duels: +1 Speed, +1 Attack (Defense remains as base)
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 1; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 2; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 3; char.base_attack += 3; char.base_defense += 0
-        if "Steel Tempest" in perk and context == "melee":
-            tier = int(perk[-1])
-            # Melee duels: +1 Attack, +1 Defense (all tiers)
-            if tier == 1: 
-                char.base_speed += 0; char.base_attack += 1; char.base_defense += 1
-            elif tier == 2: 
-                char.base_speed += 0; char.base_attack += 2; char.base_defense += 2
-            elif tier == 3: 
-                char.base_speed += 0; char.base_attack += 3; char.base_defense += 3
-        if "Sworn Sword" in perk and context == "melee":
-            tier = int(perk[-1])
-            # Melee duels: +1 Speed, +1 Defense (all tiers)
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 0; char.base_defense += 1
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 0; char.base_defense += 2
-            elif tier == 3: 
-                char.base_speed += 3; char.base_attack += 0; char.base_defense += 3
-        if "Thrown Projectile Specialist" in perk:
-            tier = int(perk[-1]) if perk[-1].isdigit() else 1
-            # All tiers: +1 Speed; Tier 3: +1 Attack as well
-            if tier == 1: 
-                char.base_speed += 1; char.base_attack += 0; char.base_defense += 0
-            elif tier == 2: 
-                char.base_speed += 2; char.base_attack += 0; char.base_defense += 0
-            elif tier == 3: 
-                char.base_speed += 3; char.base_attack += 1; char.base_defense += 0
-        # (Other battlefield/duel-seeking perks affect out-of-duel behavior or require context beyond this simulation.)
+    # Apply Perk Modifiers
+    if character.perks:                                                                 # - If Character Has Perks
+        for perk in character.perks:                                                    # -- For Each Perk
+            if perk in PERK_STAT_MODIFIERS:                                             # --- If Perk Has Stat Modifiers
+                modifiers = PERK_STAT_MODIFIERS[perk]                                   # ---- Get Modifiers
+                for stat, values in modifiers.items():                                  # ---- For Each Stat Modifier
+                    if stat == "melee":                                                 # ----- If Melee Modifier
+                        character.current_speed += values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack += values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense += values.get("defense", 0)           # ------ Add Defense Modifier
+                    elif stat == "all":                                                 # ----- If All Modifier
+                        character.current_speed += values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack += values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense += values.get("defense", 0)           # ------ Add Defense Modifier
 
-def initialize_character(char, duel_type):
-    """Apply age and perk modifiers to set current stats at duel start."""
-    apply_initial_perks(char, duel_type)
-    apply_age_malus(char)
-    char.current_speed = char.base_speed
-    char.current_attack = char.base_attack
-    char.current_defense = char.base_defense
-    char.current_morale = char.base_morale
+            if perk == "Indomitable T1":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 15                                          # ---- +15 Morale
+                character.max_combatants += 1                                           # ---- Max Combatants +1
+                character.major_injury_buff += 1                                        # ---- Ignore 1 Major Injury
+            
+            if perk == "Indomitable T2":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 30                                          # ---- +30 Morale
+                character.max_combatants += 2                                           # ---- Max Combatants +2
+                character.major_injury_buff += 2                                        # ---- Ignore 2 Major Injuries
 
-# ------------------------- Perk-Aware Roll and Attack Helpers -------------------------
-def roll_initiative(char):
-    """Roll 2d20 for initiative, add Speed, with Favored by Fortune (T1) rerolling any one '1' once."""
-    total, d1, d2 = roll_2d20()
-    total += char.current_speed
-    # Favored by Fortune T1: one-time reroll if any die came up 1
-    if "Favored by Fortune" in char.perks and not char.used_ff_reroll:
-        if d1 == 1 or d2 == 1:
-            char.used_ff_reroll = True
-            if d1 < d2:
-                new = roll_d20(); total += new - d1; d1 = new
-            else:
-                new = roll_d20(); total += new - d2; d2 = new
-    return total, d1, d2
+            if perk == "Indomitable T3":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 45                                          # ---- +45 Morale
+                character.max_combatants += 3                                           # ---- Max Combatants +3
+                character.major_injury_buff += 3                                        # ---- Ignore 3 Major Injuries
+                                         
 
-def roll_attack(attacker, defender, is_ranged=False):
-    """Roll the attack (3d5 + Attack - Defense, minimum 1) and subtract from defender's morale."""
-    raw = roll_3d5() + attacker.current_attack - defender.current_defense
-    dmg = max(raw, 1)
-    defender.current_morale -= dmg
-    return dmg
-
-def apply_secondary_injury(char, weapon_type="live"):
-    """Roll on the secondary injury table and apply any conditional perk effects (Berserker T1)."""
-    result = resolve_injury_roll(SECONDARY_INJURY_TABLE, weapon_type)
-    # Berserker T1: first time character suffers a Minor Injury, gain +2 Attack and +2 Speed
-    if result == "Minor Injury" and any(p.startswith("Berserker") for p in char.perks) and not char.berserker_triggered:
-        char.berserker_triggered = True
-        char.current_speed += 2
-        char.current_attack += 2
-    return result
-
-def apply_primary_injury(char, weapon_type="live"):
-    """Roll on the primary injury table (used when a character is defeated)."""
-    return resolve_injury_roll(PRIMARY_INJURY_TABLE, weapon_type)
-
-# ------------------------------ Combat Initialization ------------------------------
-def prepare_duel(team1, team2, duel_type):
-    """Initialize all characters on both teams for the duel."""
-    for char in team1:
-        initialize_character(char, duel_type)
-    for char in team2:
-        initialize_character(char, duel_type)
-
-# ------------------------------ Combat Simulations ------------------------------
-def single_combat_melee_melee(team1, team2, duel_type="melee"):
-    """Simulate a one-on-one melee duel."""
-    log = []
-    c1, c2 = team1[0], team2[0]
-    rnd = 1
-    while True:
-        # Initiative rolls
-        i1, d11, d12 = roll_initiative(c1)
-        i2, d21, d22 = roll_initiative(c2)
-        log.append(f"Round {rnd}: {c1.name} rolls {d11}+{d12}+Spd{c1.current_speed}={i1}")
-        log.append(f"Round {rnd}: {c2.name} rolls {d21}+{d22}+Spd{c2.current_speed}={i2}")
-        if i1 == i2:
-            log.append("Tie – no attack.")
-            rnd += 1
-            continue
-        # Determine attacker and defender based on higher initiative
-        if i1 > i2:
-            atk, defn = c1, c2
-            dice = (d11, d12)
-        else:
-            atk, defn = c2, c1
-            dice = (d21, d22)
-        # Check for crit (20 or Duelist T3's 19) and fail (1)
-        has20 = (20 in dice) or (19 in dice and "Duelist T3" in atk.perks)
-        has1 = (1 in dice)
-        # Favored by Fortune T2: force a reroll if defender's opponent rolled a crit
-        if has20 and not has1 and "Favored by Fortune T2" in defn.perks and not defn.used_ff_opp_reroll:
-            defn.used_ff_opp_reroll = True
-            log.append("→ Favored by Fortune T2 triggers a re-roll!")
-            # Skip applying this round's attack; go back to initiative roll
-            continue
-        # Resolve critical strike or failure effects (no double-count if both 20 and 1)
-        if not (has20 and has1):
-            if has20:
-                # Critical Strike: secondary injury and stat malus to defender
-                sec = apply_secondary_injury(defn)
-                malus = 2  # base malus for a crit strike
-                if sec == "Minor Injury":
-                    # Ageing With Grace: ignore minor injury malus
-                    if "Ageing With Grace" in defn.perks:
-                        malus = 0
-                elif sec == "Major Injury":
-                    if "Indomitable" in " ".join(defn.perks) and defn.major_injuries_ignored > 0:
-                        malus = 0
-                        defn.major_injuries_ignored -= 1
-                    elif "Ageing With Grace" in defn.perks:
-                        malus = 1  # half malus
-                    else:
-                        malus = 2
-                # Favored by Fortune T2 passive: halve the crit malus (to min 1)
-                if "Favored by Fortune T2" in defn.perks and malus >= 2:
-                    malus = max(1, malus // 2)
-                if malus > 0:
-                    # Reduce defender's highest stat by malus
-                    key_stat = max(("current_speed","current_attack","current_defense"), key=lambda s: getattr(defn, s))
-                    setattr(defn, key_stat, getattr(defn, key_stat) - malus)
-                    stat_name = key_stat[len("current_"):].capitalize()
-                    log.append(f"→ Crit Strike! {defn.name}'s {stat_name} -{malus}; SecInj: {sec}")
-                else:
-                    log.append(f"→ Crit Strike! {defn.name} ignores the injury malus; SecInj: {sec}")
-            elif has1:
-                # Critical Failure: secondary injury and stat malus to attacker
-                sec = apply_secondary_injury(atk)
-                malus = 2  # base malus for a crit fail
-                if sec == "Minor Injury":
-                    if "Ageing With Grace" in atk.perks:
-                        malus = 0
-                elif sec == "Major Injury":
-                    if "Indomitable" in " ".join(atk.perks) and atk.major_injuries_ignored > 0:
-                        malus = 0
-                        atk.major_injuries_ignored -= 1
-                    elif "Ageing With Grace" in atk.perks:
-                        malus = 1
-                    else:
-                        malus = 2
-                # (Favored by Fortune T2 does not affect self-inflicted failures)
-                if malus > 0:
-                    key_stat = max(("current_speed","current_attack","current_defense"), key=lambda s: getattr(atk, s))
-                    setattr(atk, key_stat, getattr(atk, key_stat) - malus)
-                    stat_name = key_stat[len("current_"):].capitalize()
-                    log.append(f"→ Crit Fail! {atk.name}'s {stat_name} -{malus}; SecInj: {sec}")
-                else:
-                    log.append(f"→ Crit Fail! {atk.name} ignores the injury malus; SecInj: {sec}")
-        # Attack roll and damage application
-        dmg = roll_attack(atk, defn)
-        # Steel Tempest T3: double damage on crit strikes
-        if "Steel Tempest T3" in atk.perks and has20 and not has1:
-            defn.current_morale -= dmg  # apply damage again
-            dmg *= 2
-        log.append(f"{atk.name} hits {defn.name} for {dmg} (Morale {defn.current_morale})")
-        # Check if defender is defeated
-        if defn.current_morale <= 0:
-            # Berserker T2: upon hitting 0, fight on for 1-3 more rounds
-            if "Berserker T2" in defn.perks and defn.berserker_rampage_rounds == 0:
-                defn.berserker_rampage_rounds = roll_d3()
-                defn.current_morale = 1  # keep them alive
-                log.append(f"{defn.name} enters a berserker rage for {defn.berserker_rampage_rounds} more rounds!")
-                rnd += 1
-                continue  # continue the duel instead of ending it
-            # Defender is actually defeated – determine primary injury and winner
-            prim = apply_primary_injury(defn)
-            log.append(f"{defn.name} defeated! PrimInj: {prim}")
-            log.append(f"{atk.name} wins!")
-            return log
-        # Decrement Berserker T2 extra rounds and handle expiry (for each combatant)
-        for combatant, opponent in ((c1, c2), (c2, c1)):
-            if combatant.berserker_rampage_rounds:
-                combatant.berserker_rampage_rounds -= 1
-                if combatant.berserker_rampage_rounds == 0 and combatant.current_morale > 0 and opponent.current_morale > 0:
-                    # Berserker's extra time expired without ending duel -> they collapse (forfeit)
-                    crit_injury = resolve_critical_injury()
-                    log.append(f"{combatant.name} collapses from exhaustion! CriticalInj: {crit_injury[0]}")
-                    log.append(f"{opponent.name} wins!")
-                    return log
-        rnd += 1
-
-def single_combat_ranged_melee(team1, team2, duel_type="mixed"):
-    """Simulate a one-on-one duel where one side is ranged and the other melee."""
-    log = []
-    rng = team1[0]  # ranged combatant
-    m = team2[0]    # melee combatant
-    # Phase 1: Ranged volleys (2 rounds normally, 3 rounds if Marksman T3)
-    volley_rounds = 3 if "Marksman T3" in rng.perks else 2
-    for rnd in range(1, volley_rounds+1):
-        i, d1, d2 = roll_initiative(rng)
-        log.append(f"Round {rnd}: {rng.name} rolls {d1}+{d2}+Spd{rng.current_speed}={i}")
-        if i >= 30:
-            dmg = roll_attack(rng, m, is_ranged=True)
-            log.append(f"{rng.name} fires {m.name} for {dmg} (Morale {m.current_morale})")
-            if m.current_morale <= 0:
-                prim = apply_primary_injury(m)
-                log.append(f"{m.name} defeated! PrimInj: {prim}")
-                log.append(f"{rng.name} wins!")
-                return log
-        else:
-            log.append(f"{rng.name} fails to hit (needs 30).")
-    # If melee character has Thrown Specialist T2/T3, they get a counter-throw at end of last volley
-    if any(p.startswith("Thrown Projectile Specialist T2") or p.startswith("Thrown Projectile Specialist T3") for p in m.perks):
-        i_th, d1_th, d2_th = roll_initiative(m)
-        log.append(f"Round {volley_rounds}: {m.name} makes a thrown attack (initiative {i_th})")
-        if i_th >= 30:
-            dmg_th = roll_attack(m, rng, is_ranged=True)
-            log.append(f"{m.name} hits {rng.name} with a thrown weapon for {dmg_th} (Morale {rng.current_morale})")
-            if rng.current_morale <= 0:
-                prim = apply_primary_injury(rng)
-                log.append(f"{rng.name} defeated! PrimInj: {prim}")
-                log.append(f"{m.name} wins!")
-                return log
-        else:
-            log.append(f"{m.name}'s thrown attack misses (needs 30).")
-    # Phase 2: Melee engagement
-    melee_round = volley_rounds + 1
-    dmg = roll_attack(m, rng)
-    log.append(f"Round {melee_round}: {m.name} strikes {rng.name} for {dmg} (Morale {rng.current_morale})")
-    if rng.current_morale <= 0:
-        prim = apply_primary_injury(rng)
-        log.append(f"{rng.name} defeated! PrimInj: {prim}")
-        log.append(f"{m.name} wins!")
-        return log
-    log.append(f"Switching to melee from round {melee_round+1}+")
-    # Change Context
+    # Apply Item Modifiers
+    if character.items:
+        for item in character.items:
+            if item == "Castle-Forged Weapon":
+                character.current_attack += 1
+            if item == "Castle-Forged Plate":
+                character.current_defence += 1
+            if item == "Masterwork Weapon":
+                character.current_attack += 2
+            if item == "Ornate Platemail":
+                character.current_defence += 2
+            if item == "Qohorik Steel Weapon":
+                character.current_attack += 3
+            if item == "Qohorik Armor":
+                character.current_defence += 3
+            if item == "Valyrian Steel Weapon":
+                character.current_attack += 4
+            if item == "Valyrian Steel Armor":
+                character.current_defence += 4
     
-    # Continue melee from next round until someone wins
-    # We reuse single_combat_melee_melee for the continued fight (skipping its initialization and Round 1 log)
-    continued_log = single_combat_melee_melee([m], [rng], duel_type="melee")
-    # The first entry of continued_log will be "Round 1: ..." for the continued duel, which is actually Round melee_round+1 overall
-    # We adjust round numbering in logging for continuity:
-    for entry in continued_log:
-        if entry.startswith("Round "):
-            # Replace "Round 1" with "Round X" where X = melee_round+1
-            round_num = int(entry.split(":")[0].split()[1]) + melee_round
-            log.append(entry.replace(f"Round 1:", f"Round {round_num}:"))
-        else:
-            log.append(entry)
-    return log
+    # Apply Current Injury Debuffs
+    if character.injuries:
+        if len(character.injuries) == 1:
+            character.current_speed -= character.injuries[0]
+        
+        if len(character.injuries) == 2:
+            character.current_speed -= character.injuries[0]
+            character.current_attack -= character.injuries[1]
 
-def single_combat_ranged_ranged(team1, team2, duel_type="ranged"):
-    """Simulate a one-on-one ranged duel."""
-    log = []
-    a1, a2 = team1[0], team2[0]
-    rnd = 1
-    while True:
-        i1, d11, d12 = roll_initiative(a1)
-        i2, d21, d22 = roll_initiative(a2)
-        log.append(f"Round {rnd}: {a1.name} rolls {d11}+{d12}+Spd{a1.current_speed}={i1}")
-        log.append(f"Round {rnd}: {a2.name} rolls {d21}+{d22}+Spd{a2.current_speed}={i2}")
-        s1 = (i1 >= 30)
-        s2 = (i2 >= 30)
-        if s1:
-            dmg = roll_attack(a1, a2, is_ranged=True)
-            log.append(f"{a1.name} fires {a2.name} for {dmg} (Morale {a2.current_morale})")
-            if a2.current_morale <= 0:
-                prim = apply_primary_injury(a2)
-                log.append(f"{a2.name} defeated! PrimInj: {prim}")
-                log.append(f"{a1.name} wins!")
-                return log
-        if s2:
-            dmg = roll_attack(a2, a1, is_ranged=True)
-            log.append(f"{a2.name} fires {a1.name} for {dmg} (Morale {a1.current_morale})")
-            if a1.current_morale <= 0:
-                prim = apply_primary_injury(a1)
-                log.append(f"{a1.name} defeated! PrimInj: {prim}")
-                log.append(f"{a2.name} wins!")
-                return log
-        if not s1 and not s2:
-            log.append("No one reached 30—no attack.")
-        rnd += 1
+        if len(character.injuries) == 3:
+            character.current_speed -= character.injuries[0]
+            character.current_attack -= character.injuries[1]
+            character.current_defense -= character.injuries[2]
 
-def multi_combat_melee_melee(team1, team2, duel_type="melee"):
-    """Simulate a multi-combat melee duel (teams of multiple combatants)."""
-    log = []
-    combatants = []
-    # Initialize all combatants
-    for side, team in enumerate((team1, team2), start=1):
-        for c in team:
-            combatants.append({'char': c, 'side': side, 'init': 0})
-    rnd = 1
-    while True:
-        alive = [entry for entry in combatants if entry['char'].current_morale > 0]
-        if len({entry['side'] for entry in alive}) < 2:
-            # One side has no one left standing
-            if alive:
-                log.append(f"Side {alive[0]['side']} wins!")
-            else:
-                log.append("All combatants are down!")
-            break
-        log.append(f"--- Round {rnd} Initiatives ---")
-        for entry in alive:
-            i, _, _ = roll_initiative(entry['char'])
-            entry['init'] = i
-            log.append(f"{entry['char'].name}(S{entry['side']}) i={i}")
-        # Sort by initiative descending for action order
-        alive.sort(key=lambda x: -x['init'])
-        # Track if an IP T2 character has been attacked already this round
-        attacked_set = set()
-        for entry in alive:
-            atk = entry['char']
-            targets = [t for t in alive 
-                       if t['side'] != entry['side'] and t['init'] < entry['init'] and t['char'].current_morale > 0]
-            if not targets:
-                continue
-            defn_entry = min(targets, key=lambda x: x['init'])
-            defn = defn_entry['char']
-            # If defender has IP T2 and was already attacked this round, skip further attacks on them
-            if defn in attacked_set and any(p.startswith("Imposing Presence T2") for p in defn.perks):
-                log.append(f"{atk.name} cannot strike {defn.name} this round (Imposing Presence).")
-                continue
-            dmg = roll_attack(atk, defn)
-            log.append(f"{atk.name} hits {defn.name} for {dmg} (Mor {defn.current_morale})")
-            # Fear the Old Man: extra secondary injury if attacker is outnumbered by >=4
-            if any(p.startswith("Fear the Old Man") for p in atk.perks):
-                allies_alive = [x for x in alive if x['side'] == entry['side'] and x['char'].current_morale > 0]
-                enemies_alive = [x for x in alive if x['side'] != entry['side'] and x['char'].current_morale > 0]
-                if len(enemies_alive) - len(allies_alive) >= 4 and defn.current_morale > 0:
-                    sec = apply_secondary_injury(defn)
-                    log.append(f"→ {atk.name}'s attack triggers extra injury: {sec}")
-            # Check if defender is down
-            if defn.current_morale <= 0:
-                # Imposing Presence threshold: if defender is alone and above their extended threshold, keep them alive
-                if any(p.startswith("Imposing Presence") for p in defn.perks):
-                    # Check if defn has any allies still alive
-                    allies_alive = [x for x in alive if x['side'] == defn_entry['side'] and x['char'] != defn and x['char'].current_morale > 0]
-                    if not allies_alive:
-                        extra_thresh = 0
-                        if "Imposing Presence T1" in defn.perks: 
-                            extra_thresh += 10
-                        if "Imposing Presence T2" in defn.perks: 
-                            extra_thresh += 5
-                        if defn.current_morale > -extra_thresh:
-                            # Not past their defeat threshold – they stay up
-                            defn.current_morale = 1
-                            log.append(f"{defn.name} fights on despite injuries (Imposing Presence).")
-                            # Mark that they were attacked this round (for IP T2 effect) 
-                            attacked_set.add(defn)
-                            continue  # skip logging defeat this iteration
-                prim = apply_primary_injury(defn)
-                log.append(f"{defn.name} defeated! PrimInj: {prim}")
-            # Mark defender as attacked if they have IP T2 (to prevent multiple hits in the same round)
-            if any(p.startswith("Imposing Presence T2") for p in defn.perks):
-                attacked_set.add(defn)
-        rnd += 1
-    return log
+######################################################################################################
+# Initialize Ranged Stats
+######################################################################################################
 
-def multi_combat_ranged_melee(team1, team2, duel_type="mixed"):
-    """Simulate a multi-combat duel with one ranged team vs one melee team."""
-    log = []
-    # Phase 1: Ranged team gets 2 rounds of shooting
-    for rnd in (1, 2):
-        log.append(f"--- Ranged Round {rnd} ---")
-        for shooter in list(team1):  # iterate over copy since we might remove from team2
-            i, _, _ = roll_initiative(shooter)
-            log.append(f"{shooter.name} rolls i={i}")
-            if i >= 30 and team2:
-                # Pick target with lowest morale on melee side
-                target = min(team2, key=lambda c: c.current_morale)
-                dmg = roll_attack(shooter, target, is_ranged=True)
-                log.append(f"{shooter.name} fires {target.name} for {dmg} (Mor {target.current_morale})")
-                if target.current_morale <= 0:
-                    # Apply IP threshold: if target is last melee and above threshold, keep them alive
-                    if any(p.startswith("Imposing Presence") for p in target.perks) and len(team2) == 1:
-                        extra_thresh = 0
-                        if "Imposing Presence T1" in target.perks: extra_thresh += 10
-                        if "Imposing Presence T2" in target.perks: extra_thresh += 5
-                        if target.current_morale > -extra_thresh:
-                            target.current_morale = 1
-                            log.append(f"{target.name} refuses to fall (Imposing Presence).")
-                            continue
-                    prim = apply_primary_injury(target)
-                    log.append(f"{target.name} defeated! PrimInj: {prim}")
-                    team2.remove(target)
-            else:
-                log.append(f"{shooter.name} fails to hit.")
-        if not team2:
-            log.append("Ranged side wins!")
-            return log
-    # Phase 2: Melee team gets a free round of attacks upon closing (Round 3)
-    log.append("--- Melee Strike Round 3 ---")
-    for striker in list(team2):
-        i, _, _ = roll_initiative(striker)
-        log.append(f"{striker.name} rolls i={i}")
-        # Determine which ranged defenders the striker beats in initiative
-        beaten = []
-        for defender in list(team1):
-            id_, _, _ = roll_initiative(defender)
-            if i > id_:
-                beaten.append(defender)
-        if beaten:
-            target = min(beaten, key=lambda c: c.current_morale)
-            dmg = roll_attack(striker, target)
-            log.append(f"{striker.name} hits {target.name} for {dmg} (Mor {target.current_morale})")
-            if target.current_morale <= 0:
-                if any(p.startswith("Imposing Presence") for p in target.perks) and len(team1) == 1:
-                    extra_thresh = 0
-                    if "Imposing Presence T1" in target.perks: extra_thresh += 10
-                    if "Imposing Presence T2" in target.perks: extra_thresh += 5
-                    if target.current_morale > -extra_thresh:
-                        target.current_morale = 1
-                        log.append(f"{target.name} fights on (Imposing Presence).")
-                        continue
-                prim = apply_primary_injury(target)
-                log.append(f"{target.name} defeated! PrimInj: {prim}")
-                team1.remove(target)
-    if not team1:
-        log.append("Melee side wins!")
-        return log
-    log.append("Switch to melee from round 4+")
-    # Phase 3: Engage in full melee with remaining combatants
-    post_log = multi_combat_melee_melee(team2, team1, duel_type="melee")
-    log.extend(post_log)
-    return log
+def ranged_initialization(character):
+    """Initialize Ranged Stats for Character"""
+    # Initialize Ranged Stats
+    character.current_speed = 0                                                         # - Current Speed
+    character.current_attack = 0                                                        # - Current Attack
+    character.current_defense = 0                                                       # - Current Defense
 
-def multi_combat_ranged_ranged(team1, team2, duel_type="ranged"):
-    """Simulate a multi-combat duel where both sides are ranged."""
-    log = []
-    combatants = []
-    for side, team in enumerate((team1, team2), start=1):
-        for c in team:
-            combatants.append({'char': c, 'side': side, 'init': 0})
-    rnd = 1
-    while True:
-        alive = [entry for entry in combatants if entry['char'].current_morale > 0]
-        if len({entry['side'] for entry in alive}) < 2:
-            log.append(f"Side {alive[0]['side']} wins!")
-            break
-        log.append(f"--- Round {rnd} Initiatives ---")
-        for entry in alive:
-            i, _, _ = roll_initiative(entry['char'])
-            entry['init'] = i
-            log.append(f"{entry['char'].name}(S{entry['side']}) i={i}")
-        alive.sort(key=lambda x: -x['init'])
-        for entry in alive:
-            atk = entry['char']
-            if entry['init'] < 30:
-                log.append(f"{atk.name} cannot fire.")
-                continue
-            targets = [t for t in alive 
-                       if t['side'] != entry['side'] and t['init'] < entry['init'] and t['char'].current_morale > 0]
-            if not targets:
-                continue
-            defn = min(targets, key=lambda x: x['init'])['char']
-            dmg = roll_attack(atk, defn, is_ranged=True)
-            log.append(f"{atk.name} fires {defn.name} for {dmg} (Mor {defn.current_morale})")
-            if defn.current_morale <= 0:
-                prim = apply_primary_injury(defn)
-                log.append(f"{defn.name} defeated! PrimInj: {prim}")
-        rnd += 1
-    return log
+    # Apply Age Malus
+    age_malus = get_age_malus(character.age)                                            # - Get Age Malus
+    character.current_speed += age_malus                                                # -- Apply Age Malus to Speed
+    character.current_attack += age_malus                                               # -- Apply Age Malus to Attack
+    character.current_defense += age_malus                                              # -- Apply Age Malus to Defense
 
-# ------------------------------ Test Harness ------------------------------
-# if __name__ == "__main__":
-    # arya = Character("Arya Stark", 6, 4, 3, 50, 18, perks=["Berserker"], combat_type="melee")
-    # hound = Character("Sandor Clegane", 4, 6, 5, 50, 36, perks=["Favored by Fortune"], combat_type="melee")
-    # ygritte = Character("Ygritte", 5, 5, 2, 40, 25, perks=["Ageing With Grace"], combat_type="ranged")
-    # jon = Character("Jon Snow", 5, 6, 3, 45, 25, perks=["Fear the Old Man"], combat_type="ranged")
+    # Apply Perk Modifiers
+    if character.perks:                                                                 # - If Character Has Perks
+        for perk in character.perks:                                                    # -- For Each Perk
+            if perk in PERK_STAT_MODIFIERS:                                             # --- If Perk Has Stat Modifiers
+                modifiers = PERK_STAT_MODIFIERS[perk]                                   # ---- Get Modifiers
+                for stat, values in modifiers.items():                                  # ---- For Each Stat Modifier
+                    if stat == "ranged":                                                # ----- If Ranged Modifier
+                        character.current_speed += values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack += values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense += values.get("defense", 0)           # ------ Add Defense Modifier
+                    elif stat == "all":                                                 # ----- If All Modifier
+                        character.current_speed += values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack += values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense += values.get("defense", 0)           # ------ Add Defense Modifier
 
-    # Pick one scenario to test:
-    # log = single_combat_melee_melee([arya],[hound], duel_type="melee")
-    # log = single_combat_ranged_melee([ygritte],[arya], duel_type="mixed")
-    # log = single_combat_ranged_ranged([jon],[ygritte], duel_type="ranged")
-    # log = multi_combat_melee_melee([arya,Character("Brienne",3,5,6)], [hound,Character("Mountain",2,8,7)], duel_type="melee")
-    # log = multi_combat_ranged_melee([ygritte],[arya, hound], duel_type="mixed")
-    # log = multi_combat_ranged_ranged([jon, ygritte],[hound, Character("Tarly",4,4,3)], duel_type="ranged")
+            if perk == "Marksman T3":                                                   # --- If Perk - Marksman T3
+                character.max_mixed_rounds += 1                                         # ---- Extra Mixed Combat Round
 
-    # for line in log:
-        # print(line)
+    # Apply Item Modifiers
+    if character.items:
+        for item in character.items:
+            if item == "Fine-Strung Bow":
+                character.current_attack += 1
+            if item == "Goldenheart Bow":
+                character.current_attack += 2
+            if item == "Dragonbone Bow":
+                character.current_attack += 3
+            if item == "Castle-Forged Plate":
+                character.current_defence += 1
+            if item == "Ornate Platemail":
+                character.current_defence += 2
+            if item == "Qohorik Armor":
+                character.current_defence += 3
+            if item == "Valyrian Steel Armor":
+                character.current_defence += 4
+    
+    # Apply Current Injury Debuffs
+    if character.injuries:
+        if len(character.injuries) == 1:
+            character.current_speed -= character.injuries[0]
+        
+        if len(character.injuries) == 2:
+            character.current_speed -= character.injuries[0]
+            character.current_attack -= character.injuries[1]
 
+        if len(character.injuries) == 3:
+            character.current_speed -= character.injuries[0]
+            character.current_attack -= character.injuries[1]
+            character.current_defense -= character.injuries[2]
+            
+######################################################################################################
+# Initialize Mixed Stats
+######################################################################################################
 
-# GUI Entry & Simulation Runner
+def mixed_initialization(character):
+    """Remove Ranged Perks for Character"""
+    # Remove Ranged Perk Modifiers
+    if character.perks:                                                                 # - If Character Has Perks
+        for perk in character.perks:                                                    # -- For Each Perk
+            if perk in PERK_STAT_MODIFIERS:                                             # --- If Perk Has Stat Modifiers
+                modifiers = PERK_STAT_MODIFIERS[perk]                                   # ---- Get Modifiers
+                for stat, values in modifiers.items():                                  # ---- For Each Stat Modifier
+                    if stat == "ranged":                                                # ----- If Mixed Modifier
+                        character.current_speed -= values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack -= values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense -= values.get("defense", 0)           # ------ Add Defense Modifier
 
-def _get_combatant(idx, combat_type):
-    print(f"\n=== Combatant #{idx} ({combat_type}) ===")
-    name = input("Name: ").strip() or f"Fighter{idx}"
-    # ask only for age and perks
-    while True:
-        try:
-            age = int(input("Age: ").strip())
-            break
-        except ValueError:
-            print("  → Please enter an integer for age.")
-    perks_input = input(
-        "Perks (comma-separated, e.g. 'Blade Specialist T3, Berserker'): "
-    ).strip()
-    perks = [p.strip() for p in perks_input.split(",") if p.strip()]
+    # Apply Melee Perk Modifiers
+    if character.perks:                                                                 # - If Character Has Perks
+        for perk in character.perks:                                                    # -- For Each Perk
+            if perk in PERK_STAT_MODIFIERS:                                             # --- If Perk Has Stat Modifiers
+                modifiers = PERK_STAT_MODIFIERS[perk]                                   # ---- Get Modifiers
+                for stat, values in modifiers.items():                                  # ---- For Each Stat Modifier
+                    if stat == "melee":                                                 # ----- If Melee Modifier
+                        character.current_speed += values.get("speed", 0)               # ------ Add Speed Modifier
+                        character.current_attack += values.get("attack", 0)             # ------ Add Attack Modifier
+                        character.current_defense += values.get("defense", 0)           # ------ Add Defense Modifier
 
-    # create with zero base stats—your perk & age logic will fill them in
-    c = Character(name, 0, 0, 0, morale=50, age=age, perks=perks, combat_type=combat_type)
-    # initialize_character(c, duel_type="mixed")
-    return c
+            if perk == "Indomitable T1":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 15                                          # ---- Morale: 65
+                character.max_combatants = 4                                            # ---- Max Combatants +1
+            
+            if perk == "Indomitable T2":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 30                                          # ---- Morale: 80
+                character.max_combatants = 5                                            # ---- Max Combatants +2
 
+            if perk == "Indomitable T3":                                                # --- If Perk - Indomitable T1
+                character.current_morale += 45                                          # ---- Morale: 95
+                character.max_combatants = 6                                            # ---- Max Combatants +3
 
-def display_stats(team1, team2, duel_type):
-    """
-    Print each combatant's initialized stats and perks.
-    """
-    print("\n=== Combatants Stats ===")
-    for side, team in enumerate((team1, team2), start=1):
-        for c in team:
-            # ensure stats reflect current state
-            # initialize_character(c, duel_type)
-            perks_str = ", ".join(c.perks) if c.perks else "None"
-            print(f"Side {side} - {c.name}: Age={c.age}, Speed={c.current_speed}, "
-                  f"Attack={c.current_attack}, Defense={c.current_defense}, "
-                  f"Morale={c.current_morale}, Perks=[{perks_str}]")
+    # Apply Item Modifiers
+    if character.items:                                                                 # - If Character Has Items
+        for item in character.items:                                                    # -- For Each Item
+            if item == "Fine-Strung Bow":                                               # --- If Fine-Strung Bow
+                character.current_attack -= 1                                           # ---- Remove Previous Modifier
+            if item == "Goldenheart Bow":                                               # --- If Goldeheart Bow
+                character.current_attack -= 2                                           # ---- Remove Previous Modifier
+            if item == "Dragonbone Bow":                                                # --- If Dragonbone Bow
+                character.current_attack -= 3                                           # ---- Remove Previous Modifier
+            if item == "Castle-Forged Weapon":                                          # --- If Castle-Forged Weapon
+                character.current_attack += 1                                           # ---- Add New Modifier
+            if item == "Masterwork Weapon":                                             # --- If Masterwork Weapon
+                character.current_attack += 2                                           # ---- Add New Modifier
+            if item == "Qohorik Steel Weapon":                                          # --- If Qohorik Steel Weapon
+                character.current_attack += 3                                           # ---- Add New Modifier
+            if item == "Valyrian Steel Weapon":
+                character.current_attack += 4
 
+######################################################################################################
+# Dice
+######################################################################################################
 
-def _run_once(fn, team1, team2, duel_type):
-    # display stats before running a single duel
-    display_stats(team1, team2, duel_type)
-    for line in fn(team1, team2, duel_type):
-        print(line)
+def roll_1d100():                                           # Roll 1d100   
+    """Roll 1d100"""                                        
+    return random.randint(1, 100)                           # Return number between 1 & 100
 
+def roll_1d20():                                            # Roll 1d20
+    """Roll 1d20"""
+    return random.randint(1, 20)                            # Return number between 1 & 20
 
-def _run_many(fn, team1, team2, duel_type, trials=10000):
-    # display stats once before bulk simulations
-    display_stats(team1, team2, duel_type)
-    import copy
-    wins = [0, 0]
-    for _ in range(trials):
-        # deep copy so we don't mutate the originals
-        t1 = [copy.deepcopy(c) for c in team1]
-        t2 = [copy.deepcopy(c) for c in team2]
-        log = fn(t1, t2, duel_type)
-        if log and "wins" in log[-1]:
-            winner = log[-1].split(" wins")[0]
-            if winner == team1[0].name:
-                wins[0] += 1
-            else:
-                wins[1] += 1
-    print(f"\nAfter {trials} runs:")
-    print(f"  {team1[0].name} wins: {wins[0]}")
-    print(f"  {team2[0].name} wins: {wins[1]}")
+def roll_2d20():                                            # Roll 2d20
+    """Roll 2d20"""
+    d1 = random.randint(1, 20)                              # Roll 1d20
+    d2 = random.randint(1, 20)                              # Roll 1d20
+    return d1 + d2, (d1, d2)                                # Return sum of 2d20 and the rolls
 
+def roll_3d5():                                             # Roll 3d5
+    """Roll 3d5"""
+    d1 = random.randint(1, 5)                               # Roll 1d5
+    d2 = random.randint(1, 5)                               # Roll 1d5
+    d3 = random.randint(1, 5)                               # Roll 1d5
+    return d1 + d2 + d3, (d1, d2, d3)                       # Return sum of 3d5 and the rolls
 
-def main():
-    scenarios = {
-        "1": (single_combat_melee_melee,    "melee",        ("melee","melee")),
-        "2": (single_combat_ranged_melee,   "mixed",        ("ranged","melee")),
-        "3": (single_combat_ranged_ranged,  "ranged",       ("ranged","ranged")),
-        "4": (multi_combat_melee_melee,     "melee_melee",  ("melee","melee")),
-        "5": (multi_combat_ranged_melee,    "mixed",        ("ranged","melee")),
-        "6": (multi_combat_ranged_ranged,   "ranged_ranged",("ranged","ranged")),
+######################################################################################################
+# Injury Rolls
+######################################################################################################
+
+def primary_injury_roll(weapons, bonus):                           
+    """Roll for Primary Injury - 1d100"""                    
+    roll = roll_1d100()                                     # - Roll 1d100     
+    roll = roll + bonus                                     # - Add Bonus (If Any)
+    if weapons.lower() == "steel":                          # -- Live Steel
+        if 1 <= roll <= 25:                                 # --- 1-25    
+            return "Death"                                  # ---- Death
+        elif 26 <= roll <= 40:                              # --- 26-40
+            crit = critical_injury()                        # ---- Roll Critical Injury
+            return f"{crit}"                                # ---- Critical Injury
+        elif 41 <= roll <= 70:                              # --- 41-70
+            return "Major Injury"                           # ---- Major Injury
+        elif 71 <= roll <= 100:                             # --- 71-100
+            return "Minor Injury"
+    elif weapons.lower() == "blunted":                      # -- Blunted Steel
+        if 1 <= roll <= 20:                                 # --- 1-20
+            return "Major Injury"                           # ---- Major Injury
+        elif 21 <= roll <= 100:                             # --- 21-100
+            return "Minor Injury"                           # ---- Minor Injury
+    else:                                                   # -- Else
+        return "Invalid steel type"                         # -- Invalid Weapon Type
+    
+def secondary_injury_roll(weapons, bonus):                          
+    """Roll for Secondary Injury - 1d100"""                  
+    roll = roll_1d100()                                     # - Roll 1d100   
+    roll = roll + bonus                                     # - Add Bonus (If Any)
+    if weapons.lower() == "steel":                          # -- Live Steel
+        if 1 <= roll <= 2:                                  # --- 1-2
+            crit = critical_injury()                        # ---- Roll Critical Injury
+            return f"Critical Injury - {crit}"              # ---- Critical Injury
+        elif 3 <= roll <= 40:                               # --- 3-40
+            return "Major Injury"                           # ---- Major Injury
+        elif 41 <= roll <= 100:                             # --- 41-100
+            return "Minor Injury"                           # ---- Minor Injury
+        
+    elif weapons.lower() == "blunted":                      # -- Blunted Steel
+        if 1 <= roll <= 20:                                 # --- 1-20
+            return "Major Injury"                           # ---- Major Injury
+        elif 21 <= roll <= 100:                             # --- 21-100
+            return "Minor Injury"                           # ---- Minor Injury
+    else:                                                   # -- Else
+        return "Invalid steel type"                         # -- Invalid Weapon Type
+
+def critical_injury():                                      
+    """Roll for Critical Injury - 1d20"""                    
+    roll = roll_1d20()                                       # - Roll 1d20
+
+    critical = {                                            # -- Critical Injury Effects
+        1:  "Death",                                        # --- Death
+        2:  "Brain Damage",                                 # --- Brain Damage
+        3:  "Spine Damage / Paralysis",                     # --- Spine Damage / Paralysis
+        4:  "Internal Organ Damage",                        # --- Internal Organ Damage
+        5:  "Groin / Abdominal Damage",                     # --- Groin / Abdominal Damage
+        6:  "Loss of Leg",                                  # --- Loss of Leg
+        7:  "Loss of Arm",                                  # --- Loss of Arm
+        8:  "Loss of Foot",                                 # --- Loss of Foot
+        9:  "Loss of Hand",                                 # --- Loss of Hand               
+        10: "Loss of Eye",                                  # --- Loss of Eye
+        11: "Loss of Hearing",                              # --- Loss of Hearing
+        12: "Mutilation / Severe Scarring",                 # --- Mutilation / Severe Scarring  
+        13: "Pneumothorax",                                 # --- Pneumothorax
+        14: "Severe Hemorrhage",                            # --- Severe Hemorrhage
+        15: "Broken Leg",                                   # --- Broken Leg
+        16: "Broken Arm",                                   # --- Broken Arm
+        17: "Broken Foot",                                  # --- Broken Foot
+        18: "Broken Hand",                                  # --- Broken Hand
+        19: "Concussion",                                   # --- Concussion
+        20: "Knocked Unconscious"                           # --- Knocked Unconscious
     }
 
-    print("\n=== Main Menu ===")
-    print("1. Single – Melee vs Melee")
-    print("2. Single – Ranged vs Melee")
-    print("3. Single – Ranged vs Ranged")
-    print("4. Multi  – Melee vs Melee")
-    print("5. Multi  – Ranged vs Melee")
-    print("6. Multi  – Ranged vs Ranged")
-    choice = input("Select scenario (1–6): ").strip()
-    if choice not in scenarios:
-        print("Invalid choice.")
-        return
-    fn, duel_type, (ct1, ct2) = scenarios[choice]
+    return critical[roll]                                   # -- Critical Injury
 
-    print("\nMode:")
-    print("1. Run Once")
-    print("2. Run 10000 Runs & Win/Losses")
-    mode = input("Select mode (1–2): ").strip()
-    if mode not in ("1", "2"):
-        print("Invalid mode.")
-        return
+######################################################################################################
+# Battlefield Duel Seeking
+######################################################################################################
 
-    # build teams
-    if choice in ("1", "2", "3"):
-        c1 = _get_combatant(1, ct1)
-        c2 = _get_combatant(2, ct2)
-        team1, team2 = [c1], [c2]
+# Battlefield Duel Seeking
+def combat_seeking(target, seeker):
+    result = roll_1d100()                                           # - Roll D100
+    if seeker.perks:                                                # - Character Perk Bonuses
+        for perk in seeker.perks:                                   # -- Iterate Through Perks
+            if perk == "Battlefield Champion T3":                   # --- Battlefield Champion T1
+                result += 5                                         # ---- Add 5
+            elif perk == "Battlefield Champion T2":                 # --- Battlefield Champion T2
+                result += 5                                         # ---- Add 10
+            elif perk == "Indomitable T1":                          # --- Indomitable T1
+                result += 5                                         # ---- Add 5
+            elif perk == "Indomitable T2":                          # --- Indomitable T2
+                result += 10                                        # ---- Add 10
+            elif perk == "Indomitable T3":                          # --- Indomitable T3
+                result += 15                                        # ---- Add 15
+            elif perk == "Duelist T1":                              # --- Duelist T1
+                result += 5                                         # ---- Add 5
+            elif perk == "Duelist T2":                              # --- Duelist T2
+                result += 10                                        # ---- Add 10
+            elif perk == "Command & Presence":                      # --- Command & Presence
+                result += 10                                        # ---- Add 10
+    if result > 50:                                                 # - Success Threshold
+        return "Character Finds Opponent!"                          # -- Found Opponent
+    else:                                                           # - Failure Threshold
+        return "Character Fails To Find Opponent!"                  # -- Did Not Find Opponent
+    
+######################################################################################################
+# Side Initialization
+######################################################################################################
+
+# Side Initialization
+def side_initialization(side_data):
+    side = []
+    for spec in side_data:
+        # Defensive: skip empty dicts or missing name
+        if not spec or not spec.get("name"):
+            continue
+        # Ensure injuries are integers (maluses), not strings
+        injuries = spec.get("injuries", [])
+        # Convert to int if not already
+        injuries = [int(i) if str(i).strip() != "" else 0 for i in injuries]
+        # Pad to 3 values if needed
+        while len(injuries) < 3:
+            injuries.append(0)
+        char = Character(
+            spec["name"],
+            age=spec.get("age", 18),
+            perks=spec.get("perks", []),
+            injuries=injuries,
+            injury_threshold=spec.get("injury_threshold", 4),
+            morale_threshold=spec.get("morale_threshold", 15),
+            items=spec.get("items", [])
+        )
+        side.append(char)
+    return side
+
+######################################################################################################
+# Combat Scenario - Melee vs Melee
+######################################################################################################
+
+def melee_melee(side1, side2, ct):
+    # Side Initialization
+    combat_side_one = side_initialization(side1)
+    combat_side_two = side_initialization(side2)
+    # Stat Initialization
+    for c in combat_side_one + combat_side_two:
+        melee_initialization(c)
+
+    print("Side 1 Combatants:")
+    for c in combat_side_one:
+        print(f"  Name: {c.name}, Age: {c.age}, Perks: {c.perks}, Injuries: {c.injuries}, Items: {c.items}")
+
+    print("Side 2 Combatants:")
+    for c in combat_side_two:
+        print(f"  Name: {c.name}, Age: {c.age}, Perks: {c.perks}, Injuries: {c.injuries}, Items: {c.items}")
+
+    # Battlefield Champion T3 Check
+    # Side One
+    bc3_count = 0
+    bc3_check = 0
+    for c in combat_side_one:
+        if "Battlefield Champion T3" in c.perks:
+            for d in combat_side_one:
+                if(bc3_count != bc3_check):
+                    d.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+
+    # Side Two
+    bc3_count = 0
+    bc3_check = 0
+    for e in combat_side_two:
+        if "Battlefield Champion T3" in e.perks:
+            for f in combat_side_one:
+                if(bc3_count != bc3_check):
+                    f.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+
+    # While Both Teams Have Combatants
+    while len(combat_side_one) > 0 and len(combat_side_two) > 0:
+
+        # Terrifying Presence T1 Check
+        # Side One
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T1" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 10
+        # Side Two
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T1" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 10
+        # Terrifying Presence T2 Check
+        # Side One
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T2" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 15
+        # Side Two
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T2" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 15
+
+        # Roll Initiative
+        # Side One
+        combat_side_one_initiative = []
+        for c in combat_side_one:
+            initiative_sum, _ = roll_2d20()
+            # Born Lucky Perk Check
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_one_initiative.append(initiative_sum + c.current_speed)
+            # Crit Checks
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 19 in _ and "Duelist T3" in c.perks:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+            # Thrown Projectile Specialist T3 - Free Throw
+            if initiative_sum >= 30 and "Thrown Projectile Specialist T3" in c.perks:
+                # Random Target Chosen
+                target = random.sample(combat_side_two, 1)[0]
+                target_index = combat_side_two.index(target)
+                # If Intiative >= 30
+                if ((initiative_sum >= 30)):
+                    # Critical Strike
+                    if (c.crit_strike == 1):
+                        # Speed Highest
+                        if((target.current_speed > target.current_attack) and (target.current_speed > target.current_defense)):
+                            target.current_speed -= 2
+                        # Attack Highest
+                        elif((target.current_attack > target.current_speed) and (target.current_attack > target.current_defense)):
+                            target.current_attack -= 2
+                        # Defence Highest
+                        elif((target.current_defense > target.current_speed) and (target.current_defense > target.current_attack)):
+                            target.current_defense -= 2
+                        bonus = 0
+                        if "Sworn Sword T1" in target.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 30
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_two.pop(target_index)
+                        # Major Injury
+                        if critical_strike_injury == "Major Injury":
+                            if "Ageing With Grace" in target.perks:
+                                target.current_speed -= 1
+                                target.current_attack -= 1
+                                target.current_defense -= 1
+                            else:
+                                target.current_speed -= 2
+                                target.current_attack -= 2
+                                target.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in target.perks and target.bloodlusted == 0:
+                                target.current_speed += 2
+                                target.current_attack += 2
+                                target.bloodlusted = 1
+                            else:
+                                target.current_speed -= 1
+                                target.current_attack -= 1
+                                target.current_defense -= 1
+                    # Status Checks
+                    c.currently_engaging = 1
+                    target.combatants_faced += 1
+                    # Attack Roll
+                    attack_sum, _ = roll_3d5()
+                    attack_roll = ((attack_sum + c.current_attack) - target.current_defense)
+                    # Steel Tempest Perk Check
+                    if "Steel Tempest T3" in c.perks:
+                        attack_roll = (attack_roll*2)
+                    # Minimum Attack - 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct From Morale
+                    target.current_morale -= attack_roll
+                    # Activate Berserker Rage Perk
+                    if ((target.current_morale <= 0) or (target.current_morale <= target.morale_threshold)) and "Berserker" in target.perks and target.berserked == 0:
+                        target.current_morale += attack_roll
+                        target.current_morale = (target.current_morale * 2)
+                        target.berserked = 1
+                    # Duel End
+                    if (target.current_morale <= 0) or (target.current_morale <= target.morale_threshold) or (len(target.injuries) >= target.injury_threshold):
+                        # If Below Morale
+                        if(target.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in target.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in target.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in target.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_two.pop(target_index)
+                    # If Terrifying Presence - Only Take One Hit
+                    if ("Terrifying Presence T2" in target.perks) and (target.combatants_faced >= 1) and (len(combat_side_two)) == 1:
+                        continue
+                # Crit Fail & Missed Opponents
+                if ((c.currently_engaging == 0) and c.crit_fail == 1):
+                    # Speed Highest
+                    if((c.current_speed > c.current_attack) and (c.current_speed > c.current_defense)):
+                        c.current_speed -= 2
+                    # Attack Highest
+                    elif((c.current_attack > c.current_speed) and (c.current_attack > c.current_defense)):
+                        c.current_attack -= 2
+                    # Defence Highest
+                    elif((c.current_defense > c.current_speed) and (c.current_defense > c.current_attack)):
+                        c.current_defense -= 2
+                    bonus = 0
+                    if "Sworn Sword T1" in target.perks:
+                        bonus += 10
+                    if "Sworn Sword T2" in target.perks:
+                        bonus += 20
+                    if "Sworn Sword T2" in target.perks:
+                        bonus += 30
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                    # Critical Injury
+                    if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                        combat_side_one.pop(c)
+                    # Major Injury
+                    if critical_fail_injury == "Major Injury":
+                        if "Ageing With Grace" in c.perks:
+                            c.current_speed -= 1
+                            c.current_attack -= 1
+                            c.current_defense -= 1
+                        else:
+                            c.current_speed -= 2
+                            c.current_attack -= 2
+                            c.current_defense -= 2
+                    # Minor Injury
+                    if critical_fail_injury == "Minor Injury":
+                        c.current_speed -= 1
+                        c.current_attack -= 1
+                        c.current_defense -= 1
+
+        # Side Two
+        combat_side_two_initiative = []
+        for c in combat_side_two:
+            initiative_sum, _ = roll_2d20()
+            # Born Lucky Perk Check
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_two_initiative.append(initiative_sum + c.current_speed)
+            # Crit Checks
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 19 in _ and "Duelist T3" in c.perks:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+            # Thrown Projectile Specialist T3 - Free Throw
+            if initiative_sum >= 30 and "Thrown Projectile Specialist T3" in c.perks:
+                # Random Target
+                target = random.sample(combat_side_one, 1)[0]
+                target_index = combat_side_one.index(target)
+                # Roll Higher Than 30
+                if ((initiative_sum >= 30)):
+                    # Critical Strike
+                    if (c.crit_strike == 1):
+                        # Highest Speed
+                        if((target.current_speed > target.current_attack) and (target.current_speed > target.current_defense)):
+                            target.current_speed -= 2
+                        # Highest Attack
+                        elif((target.current_attack > target.current_speed) and (target.current_attack > target.current_defense)):
+                            target.current_attack -= 2
+                        # Highest Defense
+                        elif((target.current_defense > target.current_speed) and (target.current_defense > target.current_attack)):
+                            target.current_defense -= 2
+                        bonus = 0
+                        if "Sworn Sword T1" in target.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 30
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_one.pop(target_index)
+                        # Major Injury
+                        if critical_strike_injury == "Major Injury":
+                            if "Ageing With Grace" in target.perks:
+                                target.current_speed -= 1
+                                target.current_attack -= 1
+                                target.current_defense -= 1
+                            else:
+                                target.current_speed -= 2
+                                target.current_attack -= 2
+                                target.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in target.perks and target.bloodlusted == 0:
+                                target.current_speed += 2
+                                target.current_attack += 2
+                                target.bloodlusted = 1
+                            else:
+                                target.current_speed -= 1
+                                target.current_attack -= 1
+                                target.current_defense -= 1
+                    # Status Check
+                    c.currently_engaging = 1
+                    target.combatants_faced += 1
+                    # Attack Roll
+                    attack_sum, _ = roll_3d5()
+                    attack_roll = ((attack_sum + c.current_attack) - target.current_defense)
+                    # Steel Tempest T3 - Double Attack
+                    if "Steel Tempest T3" in c.perks:
+                        attack_roll = attack_roll * 2
+                    # Minimum Attack Roll - 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct from Target Morale
+                    target.current_morale -= attack_roll
+                    # Berserker Rage Activated
+                    if ((target.current_morale <= 0) or (target.current_morale <= target.morale_threshold)) and "Berserker" in target.perks and target.berserked == 0:
+                        target.current_morale += attack_roll
+                        target.current_morale = (target.current_morale * 2)
+                        target.berserked = 1
+                    # Target Knocked Out
+                    if (target.current_morale <= 0) or (target.current_morale <= target.morale_threshold) or (len(target.injuries) >= target.injury_threshold):
+                        if(target.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in target.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in target.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in target.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_one.pop(target_index)
+                    # Terrifying Presence - Face One Opponent
+                    if ("Terrifying Presence T2" in target.perks) and (target.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                        continue
+                # Crit Fail & Miss
+                if ((c.currently_engaging == 0) and c.crit_fail == 1):
+                    # Speed Highest
+                    if((c.current_speed > c.current_attack) and (c.current_speed > c.current_defense)):
+                        c.current_speed -= 2
+                    # Attack Highest
+                    elif((c.current_attack > c.current_speed) and (c.current_attack > c.current_defense)):
+                        c.current_attack -= 2
+                    # Defence Highest
+                    elif((c.current_defense > c.current_speed) and (c.current_defense > c.current_attack)):
+                        c.current_defense -= 2
+                    bonus = 0
+                    if "Sworn Sword T1" in c.perks:
+                        bonus += 10
+                    if "Sworn Sword T2" in c.perks:
+                        bonus += 20
+                    if "Sworn Sword T2" in c.perks:
+                        bonus += 30
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                    # Critical Injury
+                    if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                        combat_side_two.pop(c)
+                    # Major Injury
+                    if critical_fail_injury == "Major Injury":
+                        if "Ageing With Grace" in c.perks:
+                            c.current_speed -= 1
+                            c.current_attack -= 1
+                            c.current_defense -= 1
+                        else:
+                            c.current_speed -= 2
+                            c.current_attack -= 2
+                            c.current_defense -= 2
+                    # Minor Injury
+                    if critical_fail_injury == "Minor Injury":
+                        if "Bloodlust" in c.perks and c.bloodlusted == 0:
+                            c.current_speed += 2
+                            c.current_attack += 2
+                            c.bloodlusted = 1
+                        else:
+                            c.current_speed -= 1
+                            c.current_attack -= 1
+                            c.current_defense -= 1
+
+        # Sort combat_side_one and combat_side_one_initiative by initiative (ascending)
+        side_one_pairs = list(zip(combat_side_one_initiative, combat_side_one))
+        side_one_pairs.sort(key=lambda x: x[0])
+        combat_side_one_initiative, combat_side_one = zip(*side_one_pairs)
+        combat_side_one_initiative = list(combat_side_one_initiative)
+        combat_side_one = list(combat_side_one)
+
+        # Sort combat_side_two and combat_side_two_initiative by initiative (ascending)
+        side_two_pairs = list(zip(combat_side_two_initiative, combat_side_two))
+        side_two_pairs.sort(key=lambda x: x[0])
+        combat_side_two_initiative, combat_side_two = zip(*side_two_pairs)
+        combat_side_two_initiative = list(combat_side_two_initiative)
+        combat_side_two = list(combat_side_two)
+
+        # Check Initiative
+        # Iterate Through Combat Side One
+        i = 0
+        while i < len(combat_side_one):
+            c1 = combat_side_one[i]
+            c1_init = combat_side_one_initiative[i]
+            j = 0
+            while j < len(combat_side_two):
+                c2 = combat_side_two[j]
+                c2_init = combat_side_two_initiative[j]
+                # If Combatant Has Rolled Higher
+                if ((c1_init > c2_init) and c1.currently_engaging == 0) or (c2.combatants_faced >= c2.max_combatants):
+                    # Critical Strike
+                    if (c1.crit_strike == 1):
+                        # Speed Highest
+                        if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                            c2.current_speed -= 2
+                        # Attack Highest
+                        elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                            c2.current_attack -= 2
+                        # Defence Highest
+                        elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                            c2.current_defense -= 2
+                        # Critical Strike Roll - Secondary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in c2.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 30
+                        if (("Valyrian Steel Sword" in c1.items) or ("Qohorik Steel Weapon" in c1.items)) and "Timeless Quality" in c1.perks:
+                            bonus -= 20
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Major / Critical Injury Re-roll - Shield Specialist T3 Perk
+                        if (critical_strike_injury == "Major Injury" or critical_strike_injury == "Critical Injury") and "Shield Specialist T3" in c2.perks:
+                            critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury Inflicted
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_two.pop(i)
+                            combat_side_two_initiative.pop(i)
+                        # Major Injury Taken
+                        if critical_strike_injury == "Major Injury":
+                            c2.major_injuries += 1
+                        # Major Injury Check
+                        if critical_strike_injury == "Major Injury" and c2.major_injuries > c2.major_injury_buff:
+                            if "Ageing With Grace" in c2.perks:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                            else:
+                                c2.current_speed -= 2
+                                c2.current_attack -= 2
+                                c2.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                                c2.current_speed += 2
+                                c2.current_attack += 2
+                                c2.bloodlusted = 1
+                            else:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                    # Status Check
+                    c1.currently_engaging = 1
+                    c2.combatants_faced += 1
+                    # Roll Attack
+                    attack_sum, _ = roll_3d5()
+                    # Timeless Quality Weapon Checks
+                    if ("Timeless Quality" in c1.perks and ("Valyrian Steel Sword" in c1.items or "Qohorik Steel Weapon" in c1.items)) and ("Timeless Quality" in c2.perks and ("Valyrian Steel Armor" in c2.items or "Qohorik Armor" in c2.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    elif ("Timeless Quality" in c2.perks and ("Valyrian Steel Armor" in c2.items or "Qohorik Armor" in c2.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - (c2.current_defense*2))
+                    elif ("Timeless Quality" in c1.perks and ("Valyrian Steel Sword" in c1.items or "Qohorik Steel Weapon" in c1.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - ((c2.current_defense + 1) // 2))
+                    # Normal Attack
+                    else:
+                        attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    # Steel Tempest T3 Perk Check
+                    if "Steel Tempest T3" in c1.perks:
+                        attack_roll = (attack_roll*2)
+                    # Minimum Attack - 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct Attack From Morale
+                    c2.current_morale -= attack_roll
+                    # Going Berserk
+                    if ((c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold)) and "Berserker" in c2.perks and c2.berserked == 0:
+                            c2.current_morale += attack_roll
+                            c2.current_morale = (c2.current_morale * 2)
+                            c2.berserked = 1
+                    # Combatant Knocked Out
+                    if (c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold) or (len(c2.injuries) >= c2.injury_threshold):
+                        if(c2.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in c2.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_two.pop()
+                        combat_side_two_initiative.pop()
+                        continue  # Don't increment j, as list has shifted
+                    # Only Take One Attack - Terrifying Presence
+                    if ("Terrifying Presence T2" in c2.perks) and (c2.combatants_faced >= 1) and (len(combat_side_two)) == 1:
+                        continue
+                j += 1
+            i += 1
+            # Crit Fail & Miss
+            if (c1.currently_engaging == 0) and c1.crit_fail == 1:
+                # Speed Highest
+                if((c1.current_speed > c1.current_attack) and (c1.current_speed > c1.current_defense)):
+                    c1.current_speed -= 2
+                # Attack Highest
+                elif((c1.current_attack > c1.current_speed) and (c1.current_attack > c1.current_defense)):
+                    c1.current_attack -= 2
+                # Defense Highest
+                elif((c1.current_defense > c1.current_speed) and (c1.current_defense > c1.current_attack)):
+                    c1.current_defense -= 2
+                # Roll Critical Fail - Secondary Injury
+                bonus = 0
+                if "Sworn Sword T1" in c1.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Shield Specialist T3 Check
+                if (critical_fail_injury == "Major Injury" or critical_fail_injury == "Critical Injury") and "Shield Specialist T3" in c1.perks:
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Critical Injury Knockout
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_one.pop(i)
+                    combat_side_one_initiative.pop(i)
+                # Major Injury Check
+                if critical_fail_injury == "Major Injury":
+                    c1[i].major_injuries += 1
+                # Major Injury
+                if critical_fail_injury == "Major Injury" and c1[i].major_injuries > c1[i].major_injury_buff:
+                    if "Ageing With Grace" in c1.perks:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+                    else:
+                        c1.current_speed -= 2
+                        c1.current_attack -= 2
+                        c1.current_defense -= 2
+                # Minor Injury
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                        c1.current_speed += 2
+                        c1.current_attack += 2
+                        c1.bloodlusted = 1
+                    else:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+
+        # Iterate Through Combat Side Two
+        i = 0
+        while i < len(combat_side_two):
+            c2 = combat_side_two[i]
+            c2_init = combat_side_two_initiative[i]
+            j = 0
+            while j < len(combat_side_one):
+                c1 = combat_side_one[j]
+                c1_init = combat_side_one_initiative[j]
+                # If Combatant Has Rolled Higher
+                if ((combat_side_two_initiative[i] > combat_side_one_initiative[j]) and c2.currently_engaging == 0) or (combat_side_one[j].combatants_faced >= combat_side_one[j].max_combatants):
+                    # Critical Strike
+                    if (combat_side_two[i].crit_strike == 1):
+                        # Speed Highest
+                        if((combat_side_one[j].current_speed > combat_side_one[j].current_attack) and (combat_side_one[j].current_speed > combat_side_one[j].current_defense)):
+                            combat_side_one[j].current_speed -= 2
+                        # Attack Highest
+                        elif((combat_side_one[j].current_attack > combat_side_one[j].current_speed) and (combat_side_one[j].current_attack > combat_side_one[j].current_defense)):
+                            combat_side_one[j].current_attack -= 2
+                        # Defense Highest
+                        elif((combat_side_one[j].current_defense > combat_side_one[j].current_speed) and (combat_side_one[j].current_defense > combat_side_one[j].current_attack)):
+                            combat_side_one[j].current_defense -= 2
+                        # Critical Strike Roll - Secondary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in c1.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 30
+                        if (("Valyrian Steel Sword" in c2.items) or ("Qohorik Steel Weapon" in c2.items)) and "Timeless Quality" in c2.perks:
+                            bonus -= 20
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Shield Specialist T3 Perk Check
+                        if (critical_strike_injury == "Major Injury" or critical_strike_injury == "Critical Injury") and "Shield Specialist T3" in combat_side_one[j].perks:
+                            critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_one.pop(i)
+                            combat_side_one_initiative.pop(i)
+                        # Major Injury Check
+                        if critical_strike_injury == "Major Injury":
+                            combat_side_one[j].major_injuries += 1
+                        # Major Injury
+                        if critical_strike_injury == "Major Injury" and combat_side_one[j].major_injuries > combat_side_one[j].major_injury_buff:
+                            if "Ageing With Grace" in c1.perks:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                            else:
+                                c1.current_speed -= 2
+                                c1.current_attack -= 2
+                                c1.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                                c1.current_speed += 2
+                                c1.current_attack += 2
+                                c1.bloodlusted = 1
+                            else:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                    # Status Check
+                    c2.currently_engaging = 1
+                    c1.combatants_faced += 1
+                    # Roll Attack
+                    attack_sum, _ = roll_3d5()
+                    # Timeless Quality Perk Check
+                    if ("Timeless Quality" in c2.perks and ("Valyrian Steel Sword" in c2.items or "Qohorik Steel Weapon" in c2.items)) and ("Timeless Quality" in c1.perks and ("Valyrian Steel Armor" in c1.items or "Qohorik Armor" in c1.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                    elif ("Timeless Quality" in c1.perks and ("Valyrian Steel Armor" in c1.items or "Qohorik Armor" in c1.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - (c1.current_defense*2))
+                    elif ("Timeless Quality" in c2.perks and ("Valyrian Steel Sword" in c2.items or "Qohorik Steel Weapon" in c2.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - ((c1.current_defense + 1) // 2))
+                    # Normal Attack Roll
+                    else:
+                        attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                    # Steel Tempest T3 - Double Attack
+                    if "Steel Tempest T3" in c1.perks:
+                        attack_roll = (attack_roll*2)
+                    # Minimum Attack = 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct Attack From Morale
+                    c1.current_morale -= attack_roll
+                    # Going Berserk
+                    if ((c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold)) and "Berserker" in c1.perks and c1.berserked == 0:
+                            c1.current_morale += attack_roll
+                            c1.current_morale = (c1.current_morale * 2)
+                            c1.berserked = 1
+                    # Combatant Knocked Out
+                    if (c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold) or (len(c1.injuries) >= c1.injury_threshold):
+                        if(c1.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in c1.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in c1.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in c1.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_one.pop(j)
+                        combat_side_one_initiative.pop(j)
+                        continue  # Don't increment j, as list has shifted
+                    # Take Only One Attack - Terrifying Presence T2 Perk Check
+                    if ("Terrifying Presence T2" in c1.perks) and (c1.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                        continue
+                j += 1
+            
+            # Crit Fail & Miss
+            if (c2.currently_engaging == 0) and c2.crit_fail == 1:
+                # Speed Highest
+                if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                    c2.current_speed -= 2
+                # Attack Highest
+                elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                    c2.current_attack -= 2
+                # Defence Highest
+                elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                    c2.current_defense -= 2
+                # Critical Fail Roll - Secondary Injury
+                bonus = 0
+                if "Sworn Sword T1" in c2.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c2.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c2.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Shield Specialist T3 - Perk Check
+                if (critical_fail_injury == "Major Injury" or critical_fail_injury == "Critical Injury") and "Shield Specialist T3" in c2.perks:
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Critical Injury
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_two.pop(i)
+                    combat_side_two_initiative.pop(i)
+                # Major Injury
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c2.perks:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+                    else:
+                        c2.current_speed -= 2
+                        c2.current_attack -= 2
+                        c2.current_defense -= 2
+                # Minor Injury
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                        c2.current_speed += 2
+                        c2.current_attack += 2
+                        c2.bloodlusted = 1
+                    else:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+            i += 1
+        
+        # End Of Round
+        # Stalemate
+        stalemate = 1
+        for c in combat_side_one:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        for c in combat_side_two:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        if stalemate == 1:
+            print("This round has ended in a stalemate, neither side have made progress.")
+
+        # End Of Round
+        combat_side_one_initiative = []
+        combat_side_two_initiative = []
+        # Prepare For Next Round
+        for c in combat_side_one:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Prepare For Next Round
+        for c in combat_side_two:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+
+    if len(combat_side_one) == 0:
+        print("Side two wins the duel!")
+
+    if len(combat_side_two) == 0:
+        print("Side one wins the duel!")
+
+######################################################################################################
+# Combat Scenario - Ranged vs Melee
+######################################################################################################
+
+def ranged_melee(side1, side2, ct):
+    # Side Initialization
+    combat_side_one = side_initialization(side1)
+    combat_side_two = side_initialization(side2)
+    # Stat Initialization
+    for i in range(len(combat_side_one)):
+        ranged_initialization(combat_side_one[i])
+    for j in range(len(combat_side_two)):
+        melee_initialization(combat_side_two[j])
+
+    # Battlefield Champion T3 Check
+    # Side One
+    bc3_count = 0
+    bc3_check = 0
+    for c in combat_side_one:
+        if "Battlefield Champion T3" in c.perks:
+            for d in combat_side_one:
+                if(bc3_count != bc3_check):
+                    d.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+        
+    # Side Two
+    bc3_count = 0
+    bc3_check = 0
+    for e in combat_side_two:
+        if "Battlefield Champion T3" in e.perks:
+            for f in combat_side_one:
+                if(bc3_count != bc3_check):
+                    f.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+    
+    # Stage One - Ranged Attacks
+    # Keep Track
+    ranged_rounds = 0
+    while len(combat_side_one) > 0 and len(combat_side_two) > 0:
+
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T1" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 10
+
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T1" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 10
+
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T2" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 15
+
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T2" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 15
+
+        combat_side_one_initiative = []
+        for c in combat_side_one:
+            initiative_sum, _ = roll_2d20()
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_one_initiative.append(initiative_sum + c.current_speed)
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+        
+        # Sort combat_side_one and combat_side_one_initiative by initiative (ascending)
+        side_one_pairs = list(zip(combat_side_one_initiative, combat_side_one))
+        side_one_pairs.sort(key=lambda x: x[0])
+        combat_side_one_initiative, combat_side_one = zip(*side_one_pairs)
+        combat_side_one_initiative = list(combat_side_one_initiative)
+        combat_side_one = list(combat_side_one)
+
+        # Check Initiative
+        # Iterate Through Combat Side One
+        i = 0
+        while i < len(combat_side_one):
+            c1 = combat_side_one[i]
+            j = 0
+            while j < len(combat_side_two):
+                c2 = combat_side_two[j]
+                # If Combatant Has Rolled Higher
+                if (((combat_side_one_initiative[i] >= 30) and c1.currently_engaging == 0) or (combat_side_two[j].combatants_faced >= combat_side_two[j].max_combatants)) and (c1.max_mixed_rounds >= ranged_rounds):
+                    # Critical Strike
+                    if (combat_side_one[i].crit_strike == 1):
+                        if((combat_side_two[j].current_speed > combat_side_two[j].current_attack) and (combat_side_two[j].current_speed > combat_side_two[j].current_defense)):
+                            combat_side_two[j].current_speed -= 2
+                        elif((combat_side_two[j].current_attack > combat_side_two[j].current_speed) and (combat_side_two[j].current_attack > combat_side_two[j].current_defense)):
+                            combat_side_two[j].current_attack -= 2
+                        elif((combat_side_two[j].current_defense > combat_side_two[j].current_speed) and (combat_side_two[j].current_defense > combat_side_two[j].current_attack)):
+                            combat_side_two[j].current_defense -= 2
+                        bonus = 0
+                        if "Sworn Sword T1" in c2.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 30
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_two.pop(i)
+                            combat_side_two.pop(i)
+                        if critical_strike_injury == "Major Injury":
+                            if "Ageing With Grace" in c2.perks:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                            else:
+                                c2.current_speed -= 2
+                                c2.current_attack -= 2
+                                c2.current_defense -= 2
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                                c2.current_speed += 2
+                                c2.current_attack += 2
+                                c2.bloodlusted = 1
+                            else:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                    c1.currently_engaging = 1
+                    c2.combatants_faced += 1
+                    attack_sum, _ = roll_3d5()
+                    attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    c2.current_morale -= attack_roll
+                    if ((c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold)) and "Berserker" in c2.perks and c2.berserked == 0:
+                            c2.current_morale += attack_roll
+                            c2.current_morale = (c2.current_morale * 2)
+                            c2.berserked = 1
+                    if (c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold) or (len(c2.injuries) >= c2.injury_threshold):
+                        if(c2.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in c2.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_two.pop(j)
+                        combat_side_two.pop(j)
+                        continue  # Don't increment j, as list has shifted
+                    if ("Terrifying Presence T2" in c2.perks) and (c2.combatants_faced >= 1) and (len(combat_side_two)) == 1:
+                        continue
+                j += 1
+            i += 1
+            if ((c1.currently_engaging == 0) and c1.crit_fail == 1) and (c1.max_mixed_rounds >= ranged_rounds):
+                if((c1.current_speed > c1.current_attack) and (c1.current_speed > c1.current_defense)):
+                    c1.current_speed -= 2
+                elif((c1.current_attack > c1.current_speed) and (c1.current_attack > c1.current_defense)):
+                    c1.current_attack -= 2
+                elif((c1.current_defense > c1.current_speed) and (c1.current_defense > c1.current_attack)):
+                    combat_side_two[i].current_defense -= 2
+                bonus = 0
+                if "Sworn Sword T1" in c1.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_one.pop(i)
+                    combat_side_one_initiative.pop(i)
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c1.perks:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+                    else:
+                        c1.current_speed -= 2
+                        c1.current_attack -= 2
+                        c1.current_defense -= 2
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                        c1.current_speed += 2
+                        c1.current_attack += 2
+                        c1.bloodlusted = 1
+                    else:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+
+        ranged_rounds += 1
+
+        # End Of Round
+        # Stalemate
+        stalemate = 1
+        for c in combat_side_one:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        for c in combat_side_two:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        if stalemate == 1:
+            print("This round has ended in a stalemate, neither side have made progress.")
+
+        # End Of Round
+        combat_side_one_initiative = []
+        # Prepare For Next Round
+        for c in combat_side_one:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Prepare For Next Round
+        for c in combat_side_two:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Are We Done?
+        continue_duel = 0
+        for c in combat_side_one:
+            if c.max_mixed_rounds >= ranged_rounds:
+                continue_duel += 1
+        
+        if continue_duel == 0:
+            break
+
+    # Stage 1.5 - Thrown Projectiles
+    for c in combat_side_two:
+        if "Thrown Projectile Specialist T2" in c.perks:
+            initiative_sum, _ = roll_2d20()
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+            
+            target = random.sample(combat_side_one, 1)[0]
+            target_index = combat_side_one.index(target)
+            if ((initiative_sum >= 30) or (target.combatants_faced >= target.max_combatants)):
+                # Critical Strike
+                if (c.crit_strike == 1):
+                    if((target.current_speed > target.current_attack) and (target.current_speed > target.current_defense)):
+                        target.current_speed -= 2
+                    elif((target.current_attack > target.current_speed) and (target.current_attack > target.current_defense)):
+                        target.current_attack -= 2
+                    elif((target.current_defense > target.current_speed) and (target.current_defense > target.current_attack)):
+                        target.current_defense -= 2
+                    bonus = 0
+                    if "Sworn Sword T1" in target.perks:
+                        bonus += 10
+                    if "Sworn Sword T2" in target.perks:
+                        bonus += 20
+                    if "Sworn Sword T2" in target.perks:
+                        bonus += 30
+                    critical_strike_injury = secondary_injury_roll(ct, bonus)
+                    if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                        combat_side_one.pop(target_index)
+                        combat_side_one.pop(target_index)
+                    if critical_strike_injury == "Major Injury":
+                        if "Ageing With Grace" in c.perks:
+                            target.current_speed -= 1
+                            target.current_attack -= 1
+                            target.current_defense -= 1
+                        else:
+                            target.current_speed -= 2
+                            target.current_attack -= 2
+                            target.current_defense -= 2
+                    if critical_strike_injury == "Minor Injury":
+                        if "Bloodlust" in target.perks and target.bloodlusted == 0:
+                            target.current_speed += 2
+                            target.current_attack += 2
+                            target.bloodlusted = 1
+                        else:
+                            target.current_speed -= 1
+                            target.current_attack -= 1
+                            target.current_defense -= 1
+                c.currently_engaging = 1
+                target.combatants_faced += 1
+                attack_sum, _ = roll_3d5()
+                attack_roll = ((attack_sum + c.current_attack) - target.current_defense)
+                if attack_roll <= 0:
+                    attack_roll = 1
+                target.current_morale -= attack_roll
+                if ((target.current_morale <= 0) or (target.current_morale <= target.morale_threshold)) and "Berserker" in target.perks and target.berserked == 0:
+                            target.current_morale += attack_roll
+                            target.current_morale = (target.current_morale * 2)
+                            target.berserked = 1
+                if (target.current_morale <= 0) or (target.current_morale <= target.morale_threshold) or (len(target.injuries) >= target.injury_threshold):
+                    if(target.current_morale <= 0):
+                        # Roll Primary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in target.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in target.perks:
+                            bonus += 30
+                        morale_injury_roll = primary_injury_roll(ct, bonus)
+                    combat_side_one.pop(target_index)
+                    combat_side_one.pop(target_index)
+                if ("Terrifying Presence T2" in target.perks) and (target.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                    continue
+            if ((c.currently_engaging == 0) and c.crit_fail == 1) and (c.max_mixed_rounds >= ranged_rounds):
+                if((c.current_speed > c.current_attack) and (c.current_speed > c.current_defense)):
+                    c.current_speed -= 2
+                elif((c.current_attack > c.current_speed) and (c.current_attack > c.current_defense)):
+                    c.current_attack -= 2
+                elif((c.current_defense > c.current_speed) and (c.current_defense > c.current_attack)):
+                    c.current_defense -= 2
+                bonus = 0
+                if "Sworn Sword T1" in c.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_one.pop(c)
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c.perks:
+                        c.current_speed -= 1
+                        c.current_attack -= 1
+                        c.current_defense -= 1
+                    else:
+                        c.current_speed -= 2
+                        c.current_attack -= 2
+                        c.current_defense -= 2
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c.perks and c.bloodlusted == 0:
+                        c.current_speed += 2
+                        c.current_attack += 2
+                        c.bloodlusted = 1
+                    else:
+                        c.current_speed -= 1
+                        c.current_attack -= 1
+                        c.current_defense -= 1
+    
+    # Stage 2
+    while len(combat_side_one) > 0 and len(combat_side_two) > 0:
+
+        # Iterate Through Combat Side Two
+        i = 0
+        while i < len(combat_side_two):
+            c2 = combat_side_two[i]
+            j = 0
+            while j < len(combat_side_one):
+                c1 = combat_side_one[j]
+                # One Combatant Only
+                c2.currently_engaging = 1
+                c1.combatants_faced += 1
+                # Roll Attack
+                attack_sum, _ = roll_3d5()
+                attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                if attack_roll <= 0:
+                    attack_roll = 1
+                c1.current_morale -= attack_roll
+                if ((c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold)) and "Berserker" in c1.perks and c1.berserked == 0:
+                        c1.current_morale += attack_roll
+                        c1.current_morale = (c1.current_morale * 2)
+                        c1.berserked = 1
+                if (c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold) or (len(c1.injuries) >= c1.injury_threshold):
+                    if(c1.current_morale <= 0):
+                        # Roll Primary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in c1.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 30
+                        morale_injury_roll = primary_injury_roll(ct, bonus)
+                    combat_side_one.pop(j)
+                    continue  # Don't increment j, as list has shifted
+                if ("Terrifying Presence T2" in c1.perks) and (c1.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                    continue
+                j += 1
+            i += 1
+        
+        # End Of Round
+        # Stalemate
+        stalemate = 1
+        for c in combat_side_one:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        for c in combat_side_two:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        if stalemate == 1:
+            print("This round has ended in a stalemate, neither side have made progress.")
+
+        # End Of Round
+        # Prepare For Next Round
+        for c in combat_side_one:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Prepare For Next Round
+        for c in combat_side_two:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+
+        break
+
+    # Switch Context Initialization
+    for i in range(len(combat_side_one)):
+        mixed_initialization(combat_side_one[i])
+
+    # Stage 3
+    # While Both Teams Have Combatants
+    while len(combat_side_one) > 0 and len(combat_side_two) > 0:
+
+        # Roll Initiative
+        # Side One
+        combat_side_one_initiative = []
+        for c in combat_side_one:
+            initiative_sum, _ = roll_2d20()
+            # Born Lucky Perk Check
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_one_initiative.append(initiative_sum + c.current_speed)
+            # Crit Checks
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 19 in _ and "Duelist T3" in c.perks:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+
+        # Side Two
+        combat_side_two_initiative = []
+        for c in combat_side_two:
+            initiative_sum, _ = roll_2d20()
+            # Born Lucky Perk Check
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_two_initiative.append(initiative_sum + c.current_speed)
+            # Crit Checks
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 19 in _ and "Duelist T3" in c.perks:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+
+        # Sort combat_side_one and combat_side_one_initiative by initiative (ascending)
+        side_one_pairs = list(zip(combat_side_one_initiative, combat_side_one))
+        side_one_pairs.sort(key=lambda x: x[0])
+        combat_side_one_initiative, combat_side_one = zip(*side_one_pairs)
+        combat_side_one_initiative = list(combat_side_one_initiative)
+        combat_side_one = list(combat_side_one)
+
+        # Sort combat_side_two and combat_side_two_initiative by initiative (ascending)
+        side_two_pairs = list(zip(combat_side_two_initiative, combat_side_two))
+        side_two_pairs.sort(key=lambda x: x[0])
+        combat_side_two_initiative, combat_side_two = zip(*side_two_pairs)
+        combat_side_two_initiative = list(combat_side_two_initiative)
+        combat_side_two = list(combat_side_two)
+
+        # Check Initiative
+        # Iterate Through Combat Side One
+        i = 0
+        while i < len(combat_side_one):
+            c1 = combat_side_one[i]
+            c1_init = combat_side_one_initiative[i]
+            j = 0
+            while j < len(combat_side_two):
+                c2 = combat_side_two[j]
+                c2_init = combat_side_two_initiative[j]
+                # If Combatant Has Rolled Higher
+                if ((c1_init > c2_init) and c1.currently_engaging == 0) or (c2.combatants_faced >= c2.max_combatants):
+                    # Critical Strike
+                    if (c1.crit_strike == 1):
+                        # Speed Highest
+                        if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                            c2.current_speed -= 2
+                        # Attack Highest
+                        elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                            c2.current_attack -= 2
+                        # Defence Highest
+                        elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                            c2.current_defense -= 2
+                        # Critical Strike Roll - Secondary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in c2.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c2.perks:
+                            bonus += 30
+                        if (("Valyrian Steel Sword" in c1.items) or ("Qohorik Steel Weapon" in c1.items)) and "Timeless Quality" in c1.perks:
+                            bonus -= 20
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Major / Critical Injury Re-roll - Shield Specialist T3 Perk
+                        if (critical_strike_injury == "Major Injury" or critical_strike_injury == "Critical Injury") and "Shield Specialist T3" in c2.perks:
+                            critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury Inflicted
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_two.pop(i)
+                            combat_side_two_initiative.pop(i)
+                        # Major Injury Taken
+                        if critical_strike_injury == "Major Injury":
+                            c2.major_injuries += 1
+                        # Major Injury Check
+                        if critical_strike_injury == "Major Injury" and c2.major_injuries > c2.major_injury_buff:
+                            if "Ageing With Grace" in c2.perks:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                            else:
+                                c2.current_speed -= 2
+                                c2.current_attack -= 2
+                                c2.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                                c2.current_speed += 2
+                                c2.current_attack += 2
+                                c2.bloodlusted = 1
+                            else:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                    # Status Check
+                    c1.currently_engaging = 1
+                    c2.combatants_faced += 1
+                    # Roll Attack
+                    attack_sum, _ = roll_3d5()
+                    # Timeless Quality Weapon Checks
+                    if ("Timeless Quality" in c1.perks and ("Valyrian Steel Sword" in c1.items or "Qohorik Steel Weapon" in c1.items)) and ("Timeless Quality" in c2.perks and ("Valyrian Steel Armor" in c2.items or "Qohorik Armor" in c2.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    elif ("Timeless Quality" in c2.perks and ("Valyrian Steel Armor" in c2.items or "Qohorik Armor" in c2.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - (c2.current_defense*2))
+                    elif ("Timeless Quality" in c1.perks and ("Valyrian Steel Sword" in c1.items or "Qohorik Steel Weapon" in c1.items)):
+                        attack_roll = ((attack_sum + c1.current_attack) - ((c2.current_defense + 1) // 2))
+                    # Normal Attack
+                    else:
+                        attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    # Steel Tempest T3 Perk Check
+                    if "Steel Tempest T3" in c1.perks:
+                        attack_roll = (attack_roll*2)
+                    # Minimum Attack - 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct Attack From Morale
+                    c2.current_morale -= attack_roll
+                    # Going Berserk
+                    if ((c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold)) and "Berserker" in c2.perks and c2.berserked == 0:
+                            c2.current_morale += attack_roll
+                            c2.current_morale = (c2.current_morale * 2)
+                            c2.berserked = 1
+                    # Combatant Knocked Out
+                    if (c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold) or (len(c2.injuries) >= c2.injury_threshold):
+                        if(c2.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in c2.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in c2.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_two.pop()
+                        combat_side_two_initiative.pop()
+                        continue  # Don't increment j, as list has shifted
+                    # Only Take One Attack - Terrifying Presence
+                    if ("Terrifying Presence T2" in c2.perks) and (c2.combatants_faced >= 1) and (len(combat_side_two)) == 1:
+                        continue
+                j += 1
+            i += 1
+            # Crit Fail & Miss
+            if (c1.currently_engaging == 0) and c1.crit_fail == 1:
+                # Speed Highest
+                if((c1.current_speed > c1.current_attack) and (c1.current_speed > c1.current_defense)):
+                    c1.current_speed -= 2
+                # Attack Highest
+                elif((c1.current_attack > c1.current_speed) and (c1.current_attack > c1.current_defense)):
+                    c1.current_attack -= 2
+                # Defense Highest
+                elif((c1.current_defense > c1.current_speed) and (c1.current_defense > c1.current_attack)):
+                    c1.current_defense -= 2
+                # Roll Critical Fail - Secondary Injury
+                bonus = 0
+                if "Sworn Sword T1" in c1.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c1.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Shield Specialist T3 Check
+                if (critical_fail_injury == "Major Injury" or critical_fail_injury == "Critical Injury") and "Shield Specialist T3" in c1.perks:
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Critical Injury Knockout
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_one.pop(i)
+                    combat_side_one_initiative.pop(i)
+                # Major Injury Check
+                if critical_fail_injury == "Major Injury":
+                    c1[i].major_injuries += 1
+                # Major Injury
+                if critical_fail_injury == "Major Injury" and c1[i].major_injuries > c1[i].major_injury_buff:
+                    if "Ageing With Grace" in c1.perks:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+                    else:
+                        c1.current_speed -= 2
+                        c1.current_attack -= 2
+                        c1.current_defense -= 2
+                # Minor Injury
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                        c1.current_speed += 2
+                        c1.current_attack += 2
+                        c1.bloodlusted = 1
+                    else:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+
+        # Iterate Through Combat Side Two
+        i = 0
+        while i < len(combat_side_two):
+            c2 = combat_side_two[i]
+            c2_init = combat_side_two_initiative[i]
+            j = 0
+            while j < len(combat_side_one):
+                c1 = combat_side_one[j]
+                c1_init = combat_side_one_initiative[j]
+                # If Combatant Has Rolled Higher
+                if ((combat_side_two_initiative[i] > combat_side_one_initiative[j]) and c2.currently_engaging == 0) or (combat_side_one[j].combatants_faced >= combat_side_one[j].max_combatants):
+                    # Critical Strike
+                    if (combat_side_two[i].crit_strike == 1):
+                        # Speed Highest
+                        if((combat_side_one[j].current_speed > combat_side_one[j].current_attack) and (combat_side_one[j].current_speed > combat_side_one[j].current_defense)):
+                            combat_side_one[j].current_speed -= 2
+                        # Attack Highest
+                        elif((combat_side_one[j].current_attack > combat_side_one[j].current_speed) and (combat_side_one[j].current_attack > combat_side_one[j].current_defense)):
+                            combat_side_one[j].current_attack -= 2
+                        # Defense Highest
+                        elif((combat_side_one[j].current_defense > combat_side_one[j].current_speed) and (combat_side_one[j].current_defense > combat_side_one[j].current_attack)):
+                            combat_side_one[j].current_defense -= 2
+                        # Critical Strike Roll - Secondary Injury
+                        bonus = 0
+                        if "Sworn Sword T1" in c1.perks:
+                            bonus += 10
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 20
+                        if "Sworn Sword T2" in c1.perks:
+                            bonus += 30
+                        if (("Valyrian Steel Sword" in c2.items) or ("Qohorik Steel Weapon" in c2.items)) and "Timeless Quality" in c2.perks:
+                            bonus -= 20
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Shield Specialist T3 Perk Check
+                        if (critical_strike_injury == "Major Injury" or critical_strike_injury == "Critical Injury") and "Shield Specialist T3" in combat_side_one[j].perks:
+                            critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        # Critical Injury
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_one.pop(i)
+                            combat_side_one_initiative.pop(i)
+                        # Major Injury Check
+                        if critical_strike_injury == "Major Injury":
+                            combat_side_one[j].major_injuries += 1
+                        # Major Injury
+                        if critical_strike_injury == "Major Injury" and combat_side_one[j].major_injuries > combat_side_one[j].major_injury_buff:
+                            if "Ageing With Grace" in c1.perks:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                            else:
+                                c1.current_speed -= 2
+                                c1.current_attack -= 2
+                                c1.current_defense -= 2
+                        # Minor Injury
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                                c1.current_speed += 2
+                                c1.current_attack += 2
+                                c1.bloodlusted = 1
+                            else:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                    # Status Check
+                    c2.currently_engaging = 1
+                    c1.combatants_faced += 1
+                    # Roll Attack
+                    attack_sum, _ = roll_3d5()
+                    # Timeless Quality Perk Check
+                    if ("Timeless Quality" in c2.perks and ("Valyrian Steel Sword" in c2.items or "Qohorik Steel Weapon" in c2.items)) and ("Timeless Quality" in c1.perks and ("Valyrian Steel Armor" in c1.items or "Qohorik Armor" in c1.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                    elif ("Timeless Quality" in c1.perks and ("Valyrian Steel Armor" in c1.items or "Qohorik Armor" in c1.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - (c1.current_defense*2))
+                    elif ("Timeless Quality" in c2.perks and ("Valyrian Steel Sword" in c2.items or "Qohorik Steel Weapon" in c2.items)):
+                        attack_roll = ((attack_sum + c2.current_attack) - ((c1.current_defense + 1) // 2))
+                    # Normal Attack Roll
+                    else:
+                        attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                    # Steel Tempest T3 - Double Attack
+                    if "Steel Tempest T3" in c1.perks:
+                        attack_roll = (attack_roll*2)
+                    # Minimum Attack = 1
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    # Deduct Attack From Morale
+                    c1.current_morale -= attack_roll
+                    # Going Berserk
+                    if ((c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold)) and "Berserker" in c1.perks and c1.berserked == 0:
+                            c1.current_morale += attack_roll
+                            c1.current_morale = (c1.current_morale * 2)
+                            c1.berserked = 1
+                    # Combatant Knocked Out
+                    if (c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold) or (len(c1.injuries) >= c1.injury_threshold):
+                        if(c1.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            if "Sworn Sword T1" in c1.perks:
+                                bonus += 10
+                            if "Sworn Sword T2" in c1.perks:
+                                bonus += 20
+                            if "Sworn Sword T2" in c1.perks:
+                                bonus += 30
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_one.pop(j)
+                        combat_side_one_initiative.pop(j)
+                        continue  # Don't increment j, as list has shifted
+                    # Take Only One Attack - Terrifying Presence T2 Perk Check
+                    if ("Terrifying Presence T2" in c1.perks) and (c1.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                        continue
+                j += 1
+            
+            # Crit Fail & Miss
+            if (c2.currently_engaging == 0) and c2.crit_fail == 1:
+                # Speed Highest
+                if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                    c2.current_speed -= 2
+                # Attack Highest
+                elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                    c2.current_attack -= 2
+                # Defence Highest
+                elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                    c2.current_defense -= 2
+                # Critical Fail Roll - Secondary Injury
+                bonus = 0
+                if "Sworn Sword T1" in c2.perks:
+                    bonus += 10
+                if "Sworn Sword T2" in c2.perks:
+                    bonus += 20
+                if "Sworn Sword T2" in c2.perks:
+                    bonus += 30
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Shield Specialist T3 - Perk Check
+                if (critical_fail_injury == "Major Injury" or critical_fail_injury == "Critical Injury") and "Shield Specialist T3" in c2.perks:
+                    critical_fail_injury = secondary_injury_roll(ct, bonus)
+                # Critical Injury
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_two.pop(i)
+                    combat_side_two_initiative.pop(i)
+                # Major Injury
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c2.perks:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+                    else:
+                        c2.current_speed -= 2
+                        c2.current_attack -= 2
+                        c2.current_defense -= 2
+                # Minor Injury
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                        c2.current_speed += 2
+                        c2.current_attack += 2
+                        c2.bloodlusted = 1
+                    else:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+            i += 1
+        
+        # End Of Round
+        # Stalemate
+        stalemate = 1
+        for c in combat_side_one:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        for c in combat_side_two:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        if stalemate == 1:
+            print("This round has ended in a stalemate, neither side have made progress.")
+
+        # End Of Round
+        combat_side_one_initiative = []
+        combat_side_two_initiative = []
+        # Prepare For Next Round
+        for c in combat_side_one:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Prepare For Next Round
+        for c in combat_side_two:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+
+    if len(combat_side_one) == 0:
+        print("Side two wins the duel!")
+
+    if len(combat_side_two) == 0:
+        print("Side one wins the duel!")
+    
+######################################################################################################
+# Combat Scenario - Ranged vs Ranged
+######################################################################################################
+
+def ranged_ranged(side1, side2, ct):
+    # Side Initialization
+    combat_side_one = side_initialization(side1)
+    combat_side_two = side_initialization(side2)
+    # Stat Initialization
+    for c in combat_side_one + combat_side_two:
+        ranged_initialization(c)
+
+    # Battlefield Champion T3 Check
+    # Side One
+    bc3_count = 0
+    bc3_check = 0
+    for c in combat_side_one:
+        if "Battlefield Champion T3" in c.perks:
+            for d in combat_side_one:
+                if(bc3_count != bc3_check):
+                    d.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+        
+    # Side Two
+    bc3_count = 0
+    bc3_check = 0
+    for e in combat_side_two:
+        if "Battlefield Champion T3" in e.perks:
+            for f in combat_side_one:
+                if(bc3_count != bc3_check):
+                    f.current_morale += 7
+                bc3_check +=1
+        bc3_count += 1
+
+    while len(combat_side_one) > 0 and len(combat_side_two) > 0:
+
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T1" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 10
+
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T1" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 10
+
+        if (len(combat_side_one) == 1) and len(combat_side_two) > 1 and ("Terrifying Presence T2" in combat_side_one[0].perks) and (combat_side_one[0].imposed_presence == 0):
+            combat_side_one[0].imposed_presence = 1
+            for c in combat_side_two:
+                c.morale_threshold += 15
+
+        if (len(combat_side_two) == 1) and len(combat_side_one) > 1 and ("Terrifying Presence T2" in combat_side_two[0].perks) and (combat_side_two[0].imposed_presence == 0):
+            combat_side_two[0].imposed_presence = 1
+            for c in combat_side_one:
+                c.morale_threshold += 15
+
+        # Roll Initiative
+        # Side One
+        combat_side_one_initiative = []
+        for c in combat_side_one:
+            initiative_sum, _ = roll_2d20()
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_one_initiative.append(initiative_sum + c.current_speed)
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+        # Side Two
+        combat_side_two_initiative = []
+        for c in combat_side_two:
+            initiative_sum, _ = roll_2d20()
+            if ("Born Lucky" in c.perks) and (0 in _) and c.you_lucky == 0:
+                c.you_lucky = 1
+                initiative_sum, _ = roll_2d20()
+            combat_side_two_initiative.append(initiative_sum + c.current_speed)
+            if 0 in _:
+                c.crit_fail = 1
+            if 20 in _:
+                c.crit_success = 1
+            if 0 in _ and 20 in _:
+                c.crit_fail = 0
+                c.crit_success = 0
+
+        # Sort combat_side_one and combat_side_one_initiative by initiative (ascending)
+        side_one_pairs = list(zip(combat_side_one_initiative, combat_side_one))
+        side_one_pairs.sort(key=lambda x: x[0])
+        combat_side_one_initiative, combat_side_one = zip(*side_one_pairs)
+        combat_side_one_initiative = list(combat_side_one_initiative)
+        combat_side_one = list(combat_side_one)
+
+        # Sort combat_side_two and combat_side_two_initiative by initiative (ascending)
+        side_two_pairs = list(zip(combat_side_two_initiative, combat_side_two))
+        side_two_pairs.sort(key=lambda x: x[0])
+        combat_side_two_initiative, combat_side_two = zip(*side_two_pairs)
+        combat_side_two_initiative = list(combat_side_two_initiative)
+        combat_side_two = list(combat_side_two)
+        
+        # Check Initiative
+        # Iterate Through Combat Side One
+        i = 0
+        while i < len(combat_side_one):
+            c1 = combat_side_one[i]
+            j = 0
+            while j < len(combat_side_two):
+                c2 = combat_side_two[j]
+                # If Combatant Has Rolled Higher
+                if ((combat_side_one_initiative[i] >= 30) and c1.currently_engaging == 0) or (combat_side_two[j].combatants_faced >= combat_side_two[j].max_combatants):
+                    # Critical Strike
+                    if (combat_side_one[i].crit_strike == 1):
+                        if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                            c2.current_speed -= 2
+                        elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                            c2.current_attack -= 2
+                        elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                            c2.current_defense -= 2
+                        bonus = 0
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_two.pop(i)
+                            combat_side_two_initiative.pop(i)
+                        if critical_strike_injury == "Major Injury":
+                            if "Ageing With Grace" in c2.perks:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                            else:
+                                c2.current_speed -= 2
+                                c2.current_attack -= 2
+                                c2.current_defense -= 2
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                                c2.current_speed += 2
+                                c2.current_attack += 2
+                                c2.bloodlusted = 1
+                            else:
+                                c2.current_speed -= 1
+                                c2.current_attack -= 1
+                                c2.current_defense -= 1
+                    c1.currently_engaging = 1
+                    c2.combatants_faced += 1
+                    attack_sum, _ = roll_3d5()
+                    attack_roll = ((attack_sum + c1.current_attack) - c2.current_defense)
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    c2.current_morale -= attack_roll
+                    if ((c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold)) and "Berserker" in c2.perks and c2.berserked == 0:
+                            c2.current_morale += attack_roll
+                            c2.current_morale = (c2.current_morale * 2)
+                            c2.berserked = 1
+                    if (c2.current_morale <= 0) or (c2.current_morale <= c2.morale_threshold) or (len(c2.injuries) >= c2.injury_threshold):
+                        if(c2.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_two.pop(j)
+                        combat_side_two_initiative.pop(j)
+                        continue  # Don't increment j, as list has shifted
+                    if ("Terrifying Presence T2" in c2.perks) and (c2.combatants_faced >= 1) and (len(combat_side_two)) == 1:
+                        continue
+                j += 1
+            i += 1
+            if (c1.currently_engaging == 0) and c1.crit_fail == 1:
+                if((c1.current_speed > c1.current_attack) and (c1.current_speed > c1.current_defense)):
+                    c1.current_speed -= 2
+                elif((c1.current_attack > c1.current_speed) and (c1.current_attack > c1.current_defense)):
+                    c1.current_attack -= 2
+                elif((c1.current_defense > c1.current_speed) and (c1.current_defense > c1.current_attack)):
+                    c1.current_defense -= 2
+                bonus = 0
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_one.pop(i)
+                    combat_side_one_initiative.pop(i)
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c1.perks:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+                    else:
+                        c1.current_speed -= 2
+                        c1.current_attack -= 2
+                        c1.current_defense -= 2
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                        c1.current_speed += 2
+                        c1.current_attack += 2
+                        c1.bloodlusted = 1
+                    else:
+                        c1.current_speed -= 1
+                        c1.current_attack -= 1
+                        c1.current_defense -= 1
+
+        # Iterate Through Combat Side Two
+        i = 0
+        while i < len(combat_side_two):
+            c2 = combat_side_two[i]
+            j = 0
+            while j < len(combat_side_one):
+                c1 = combat_side_one[j]
+                # If Combatant Has Rolled Higher
+                if ((combat_side_two_initiative[i] > 30) and c2.currently_engaging == 0) or (combat_side_one[j].combatants_faced >= combat_side_one[j].max_combatants):
+                    # Critical Strike
+                    if (c2.crit_strike == 1):
+                        if((c1.current_speed > c1.current_attack) and (c1.current_speed > c1.current_defense)):
+                            c1.current_speed -= 2
+                        elif((c1.current_attack > c1.current_speed) and (c1.current_attack > c1.current_defense)):
+                            c1.current_attack -= 2
+                        elif((c1.current_defense > c1.current_speed) and (c1.current_defense > c1.current_attack)):
+                            c1.current_defense -= 2
+                        bonus = 0
+                        critical_strike_injury = secondary_injury_roll(ct, bonus)
+                        if isinstance(critical_strike_injury, str) and "Critical Injury" in critical_strike_injury:
+                            combat_side_one.pop(i)
+                            combat_side_one_initiative.pop(i)
+                        if critical_strike_injury == "Major Injury":
+                            if "Ageing With Grace" in c1.perks:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                            else:
+                                c1.current_speed -= 2
+                                c1.current_attack -= 2
+                                c1.current_defense -= 2
+                        if critical_strike_injury == "Minor Injury":
+                            if "Bloodlust" in c1.perks and c1.bloodlusted == 0:
+                                c1.current_speed += 2
+                                c1.current_attack += 2
+                                c1.bloodlusted = 1
+                            else:
+                                c1.current_speed -= 1
+                                c1.current_attack -= 1
+                                c1.current_defense -= 1
+                    # One Combatant Only
+                    c2.currently_engaging = 1
+                    c1.combatants_faced += 1
+                    # Roll Attack
+                    attack_sum, _ = roll_3d5()
+                    attack_roll = ((attack_sum + c2.current_attack) - c1.current_defense)
+                    if attack_roll <= 0:
+                        attack_roll = 1
+                    c1.current_morale -= attack_roll
+                    if ((c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold)) and "Berserker" in c1.perks and c1.berserked == 0:
+                            c1.current_morale += attack_roll
+                            c1.current_morale = (c1.current_morale * 2)
+                            c1.berserked = 1
+                    if (c1.current_morale <= 0) or (c1.current_morale <= c1.morale_threshold) or (len(c1.injuries) >= c1.injury_threshold):
+                        if(c1.current_morale <= 0):
+                            # Roll Primary Injury
+                            bonus = 0
+                            morale_injury_roll = primary_injury_roll(ct, bonus)
+                        combat_side_one.pop(j)
+                        combat_side_one_initiative.pop(j)
+                        continue  # Don't increment j, as list has shifted
+                    if ("Terrifying Presence T2" in c1.perks) and (c1.combatants_faced >= 1) and (len(combat_side_one)) == 1:
+                        continue
+                j += 1
+            
+            if (c2.currently_engaging == 0) and c2.crit_fail == 1:
+                if((c2.current_speed > c2.current_attack) and (c2.current_speed > c2.current_defense)):
+                    c2.current_speed -= 2
+                elif((c2.current_attack > c2.current_speed) and (c2.current_attack > c2.current_defense)):
+                    c2.current_attack -= 2
+                elif((c2.current_defense > c2.current_speed) and (c2.current_defense > c2.current_attack)):
+                    c2.current_defense -= 2
+                bonus = 0
+                critical_fail_injury = secondary_injury_roll(ct, bonus)
+                if isinstance(critical_fail_injury, str) and "Critical Injury" in critical_fail_injury:
+                    combat_side_two.pop(i)
+                    combat_side_two_initiative.pop(i)
+                if critical_fail_injury == "Major Injury":
+                    if "Ageing With Grace" in c2.perks:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+                    else:
+                        c2.current_speed -= 2
+                        c2.current_attack -= 2
+                        c2.current_defense -= 2
+                if critical_fail_injury == "Minor Injury":
+                    if "Bloodlust" in c2.perks and c2.bloodlusted == 0:
+                        c2.current_speed += 2
+                        c2.current_attack += 2
+                        c2.bloodlusted = 1
+                    else:
+                        c2.current_speed -= 1
+                        c2.current_attack -= 1
+                        c2.current_defense -= 1
+            i += 1
+        
+        # End Of Round
+        # Stalemate
+        stalemate = 1
+        for c in combat_side_one:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        for c in combat_side_two:
+            if c.currently_engaging == 1:
+                stalemate = 0
+        if stalemate == 1:
+            print("This round has ended in a stalemate, neither side have made progress.")
+
+        # End Of Round
+        combat_side_one_initiative = []
+        combat_side_two_initiative = []
+        # Prepare For Next Round
+        for c in combat_side_one:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+        # Prepare For Next Round
+        for c in combat_side_two:
+            c.currently_engaging = 0
+            c.crit_success = 0
+            c.crit_fail = 0
+            c.combatants_faced = 0
+
+    if len(combat_side_one) == 0:
+        print("Side two wins the duel!")
+
+    if len(combat_side_two) == 0:
+        print("Side one wins the duel!")
+
+
+######################################################################################################
+# Combat Simulation
+######################################################################################################
+
+# Testing Block
+# Characters
+# arya = Character("Arya", 0, 0, 0, morale=50, age=18, perks=None, injuries=None, injury_threshold=4, morale_threshold=15)
+# hound = Character("The Hound", 0, 0, 0, morale=50, age=18, perks=None, injuries=None, injury_threshold=4, morale_threshold=15)
+# ygritte = Character("Ygritte", 0, 0, 0, morale=50, age=18, perks=None, injuries=None, injury_threshold=4, morale_threshold=15)
+# jon = Character("Jon", 0, 0, 0, morale=50, age=18, perks=None, injuries=None, injury_threshold=4, morale_threshold=15)
+# Sides
+# side1 = [arya, hound]
+# side2 = [ygritte, jon]
+
+# Combat Initialization
+def combat_initialization(combat_data, side1_data, side2_data):
+
+    # Live Combat
+    if combat_data == "Live Melee vs Melee":
+        melee_melee(side1_data, side2_data, "steel")
+    elif combat_data == "Live Ranged vs Melee":
+        ranged_melee(side1_data, side2_data, "steel")
+    elif combat_data == "Live Ranged vs Ranged":
+        ranged_ranged(side1_data, side2_data, "steel")
+
+    # Blunted Combat
+    elif combat_data == "Blunted Melee vs Melee":
+        melee_melee(side1_data, side2_data, "blunted")
+    elif combat_data == "Blunted Ranged vs Melee":
+        ranged_melee(side1_data, side2_data, "blunted")
+    elif combat_data == "Blunted Ranged vs Ranged":
+        ranged_ranged(side1_data, side2_data, "blunted")
+
+######################################################################################################
+# Maesty Interface
+######################################################################################################
+
+# Maesty Example Comments:
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Live Melee vs Melee>
+# /u/maesterbot
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Live Ranged vs Melee>
+# /u/maesterbot
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Live Ranged vs Ranged>
+# /u/maesterbot
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Blunted Melee vs Melee>
+# /u/maesterbot
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Blunted Ranged vs Melee>
+# /u/maesterbot
+
+# Side 1: Arya, Brienne;
+# Side 2: Jaime, Bronn;
+# <Blunted Ranged vs Ranged>
+# /u/maesterbot
+
+# Initial Data Required
+# Side 1
+# side1_data = [
+#     {"name": "Arya", "age": 18, "perks": ["Born Lucky"], "injuries": [], "injury_threshold": 4, "morale_threshold": 15},
+#     {"name": "Brienne", "age": 32, "perks": ["Sworn Sword T2"], "injuries": [], "injury_threshold": 4, "morale_threshold": 15}
+# ]
+# # Side 2
+# side2_data = [
+#     {"name": "Jaime", "age": 35, "perks": ["Blade Specialist T3"], "injuries": [], "injury_threshold": 4, "morale_threshold": 15},
+#     {"name": "Bronn", "age": 40, "perks": ["Marksman T1"], "injuries": [], "injury_threshold": 4, "morale_threshold": 15}
+# ]
+
+# Combat Type
+# combat_data = "Live Melee vs Melee"
+# combat_data = "Live Ranged vs Melee" - Side 1 Must Be Ranged
+# combat_data = "Live Ranged vs Ranged"
+# combat_data = "Blunted Melee vs Melee"
+# combat_data = "Blunted Ranged vs Melee" - Side 1 Must Be Ranged
+# combat_data = "Blunted Ranged vs Ranged"
+
+# Combat Initialization
+# if __name__ == "__main__":
+    # combat_data = "Live Melee vs Melee"
+    # combat_initialization(combat_data, side1_data, side2_data)          # Initialize Combat
+
+    # Pause at the end so output is visible if run from double-click or IDE
+    # input("\nPress Enter to exit...")
+
+######################################################################################################
+# CLI Interface
+######################################################################################################
+
+while True:
+    # Initialize Sides
+    side1_data = []
+    side2_data = []
+    # Print Menu
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    print("           Crowned Stag Duel Rework")
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    print("\n1: Battlefield Duel Seeking")
+    print("2: Melee vs Melee")
+    print("3: Ranged vs Melee")
+    print("4: Ranged vs Ranged\n")
+    # Select Option
+    choice = input("Select an option (1-4): ").strip()
+    # Battlefield Seeking
+    if choice == "1":
+        # Target
+        print("\nSide One:\n")
+        print(f"Target: ")
+        name = input("Name: ").strip()
+        age = input("Age: ").strip()
+        perks = input("Perks (Blade Specialist T3, Born Lucky): ").strip()
+        injuries = input("Injuries: ").strip()
+        injury_threshold = input("Injury Threshold (Default: 4): ").strip()
+        morale_threshold = input("Morale Threshold (Default: 15): ").strip()
+        items = input("Items (Valyrian Steel Sword): ").strip()
+        # Parse injuries as maluses for speed, attack, defense
+        injury_maluses = [int(x.strip()) for x in injuries.split(",") if x.strip()] if injuries else []
+        # Pad to 3 values if needed
+        while len(injury_maluses) < 3:
+            injury_maluses.append(0)
+        target = Character(
+            name,
+            int(age) if age else 18,
+            [p.strip() for p in perks.split(",") if p.strip()] if perks else [],
+            injury_maluses,
+            int(injury_threshold) if injury_threshold else 4,
+            int(morale_threshold) if morale_threshold else 15,
+            [it.strip() for it in items.split(",") if it.strip()] if items else []
+        )
+        # Initiator
+        print("\nSide Two:\n")
+        print(f"Seeker: ")
+        name = input("Name: ").strip()
+        age = input("Age: ").strip()
+        perks = input("Perks (Blade Specialist T3, Born Lucky): ").strip()
+        injuries = input("Injuries: ").strip()
+        injury_threshold = input("Injury Threshold (Default: 4): ").strip()
+        morale_threshold = input("Morale Threshold (Default: 15): ").strip()
+        items = input("Items (Valyrian Steel Sword): ").strip()
+        # Parse injuries as maluses for speed, attack, defense
+        injury_maluses = [int(x.strip()) for x in injuries.split(",") if x.strip()] if injuries else []
+        # Pad to 3 values if needed
+        while len(injury_maluses) < 3:
+            injury_maluses.append(0)
+        initiator = Character(
+            name,
+            int(age) if age else 18,
+            [p.strip() for p in perks.split(",") if p.strip()] if perks else [],
+            [i.strip() for i in injuries.split(",") if i.strip()] if injuries else [],
+            int(injury_threshold) if injury_threshold else 4,
+            int(morale_threshold) if morale_threshold else 15,
+            [it.strip() for it in items.split(",") if it.strip()] if items else []
+        )
+        # Combat Seeking Roll
+        combat_seeking(target, initiator)
+    # Combat
+    elif choice == "2" or choice == "3" or choice == "4":
+        print("\n1: Steel Weapons")
+        print("2: Blunted Weapons\n")
+        combat_type = input("Select an option (1-2): ").strip()
+        if combat_type == "1" or combat_type == "2":
+            print("\n1: Test Run - 1")
+            print("2: Test Run - 10000\n")
+            test_runs = input("Select an option (1-2): ").strip()
+            if test_runs == "1" or test_runs == "2":
+                side_one = input("\nEnter # of Combatants - Side 1: ").strip()
+                side_two = input("Enter # of Combatants - Side 2: ").strip()
+                try:
+                    side_one_int = int(side_one)
+                    side_two_int = int(side_two)
+                    if side_one_int > 0 and side_two_int > 0:
+                        s1 = 0
+                        s2 = 0
+                        while s1 < side_one_int:
+                            if s1 == 0:
+                                print("\nSide One:\n")
+                            print(f"Combatant {s1 + 1}")
+                            name = input("Name: ").strip()
+                            age = input("Age: ").strip()
+                            perks = input("Perks (Blade Specialist T3, Born Lucky): ").strip()
+                            injuries = input("Injuries: ").strip()
+                            injury_threshold = input("Injury Threshold (Default: 4): ").strip()
+                            morale_threshold = input("Morale Threshold (Default: 15): ").strip()
+                            items = input("Items (Valyrian Steel Sword): ").strip()
+                            # Parse injuries as maluses for speed, attack, defense
+                            injury_maluses = [int(x.strip()) for x in injuries.split(",") if x.strip()] if injuries else []
+                            # Pad to 3 values if needed
+                            while len(injury_maluses) < 3:
+                                injury_maluses.append(0)
+                            side1_data.append({
+                                "name": name,
+                                "age": int(age) if age else 18,
+                                "perks": [p.strip() for p in perks.split(",") if p.strip()] if perks else [],
+                                "injuries": [i.strip() for i in injuries.split(",") if i.strip()] if injuries else [],
+                                "injury_threshold": int(injury_threshold) if injury_threshold else 4,
+                                "morale_threshold": int(morale_threshold) if morale_threshold else 15,
+                                "items": [it.strip() for it in items.split(",") if it.strip()] if items else []
+                            })
+                            s1 += 1
+                        while s2 < side_two_int:
+                            if s2 == 0:
+                                print("\nSide Two:\n")
+                            print(f"Combatant {s2 + 1}")
+                            name = input("Name: ").strip()
+                            age = input("Age: ").strip()
+                            perks = input("Perks (Blade Specialist T3, Born Lucky): ").strip()
+                            injuries = input("Injuries: ").strip()
+                            injury_threshold = input("Injury Threshold (Default: 4): ").strip()
+                            morale_threshold = input("Morale Threshold (Default: 15): ").strip()
+                            items = input("Items (Valyrian Steel Sword): ").strip()
+                            # Parse injuries as maluses for speed, attack, defense
+                            injury_maluses = [int(x.strip()) for x in injuries.split(",") if x.strip()] if injuries else []
+                            # Pad to 3 values if needed
+                            while len(injury_maluses) < 3:
+                                injury_maluses.append(0)
+                            side2_data.append({
+                                "name": name,
+                                "age": int(age) if age else 18,
+                                "perks": [p.strip() for p in perks.split(",") if p.strip()] if perks else [],
+                                "injuries": [i.strip() for i in injuries.split(",") if i.strip()] if injuries else [],
+                                "injury_threshold": int(injury_threshold) if injury_threshold else 4,
+                                "morale_threshold": int(morale_threshold) if morale_threshold else 15,
+                                "items": [it.strip() for it in items.split(",") if it.strip()] if items else []
+                            })
+                            s2 += 1
+                        # default
+                        combat_data = "Live Melee vs Melee"
+                        if choice == "2" and combat_type == "1":
+                            combat_data = "Live Melee vs Melee"
+                        if choice == "2" and combat_type == "2":
+                            combat_data = "Blunted Melee vs Melee"
+                        if choice == "3" and combat_type == "1":
+                            combat_data = "Live Ranged vs Melee"
+                        if choice == "3" and combat_type == "2":
+                            combat_data = "Blunted Ranged vs Melee"
+                        if choice == "4" and combat_type == "1":
+                            combat_data = "Live Ranged vs Ranged"
+                        if choice == "4" and combat_type == "2":
+                            combat_data = "Blunted Ranged vs Ranged"
+                        if test_runs == "1":
+                            combat_initialization(combat_data, side1_data, side2_data)
+                        if test_runs == "2":
+                            i = 0
+                            while i < 10000:
+                                combat_initialization(combat_data, side1_data, side2_data)
+                                i = i + 1
+                    else:
+                        print("Invalid amount.")
+                except ValueError:
+                    print("Invalid amount.")
+            else:
+                print("Invalid option.")
+        else:
+            print("Invalid option.")
     else:
-        while True:
-            try:
-                n1 = int(input("\nTeam 1 size (1–25): ").strip())
-                n2 = int(input("Team 2 size (1–25): ").strip())
-                if 1 <= n1 <= 25 and 1 <= n2 <= 25:
-                    break
-            except ValueError:
-                pass
-            print("  → Please enter integers between 1 and 25.")
-        team1 = [_get_combatant(i+1, ct1) for i in range(n1)]
-        team2 = [_get_combatant(i+1, ct2) for i in range(n2)]
-
-    # Initialize characters for the selected duel scenario
-    prepare_duel(team1, team2, duel_type)   
-
-    # execute
-    if mode == "1":
-        _run_once(fn, team1, team2, duel_type)
-    else:
-        _run_many(fn, team1, team2, duel_type, trials=10000)
-
-
-if __name__ == "__main__":
-    while True:
-        main()
+        print("Invalid option.")
+    
